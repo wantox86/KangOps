@@ -1,0 +1,433 @@
+# KangDocker — Claude Code Guide
+
+> This file is the original product spec (`~/Documents/CLAUDE-KangDocker.md`), copied into the
+> repo as the source of truth for architecture/roadmap, with a **Current State** section
+> prepended. Update the Current State section as milestones complete; the spec below stays
+> mostly as planning guidance until a milestone's actual implementation diverges from it.
+
+## Current State
+
+**Milestone 1 (Runnable foundation) — complete, 2026-08-25.**
+
+- `api/`: Fastify + TypeScript (strict), `/healthz`, `/readyz`, typed `/api/v1/summary`
+  placeholder (returns honest empty/"unknown" data — no collector exists yet). SQLite via
+  Drizzle ORM + `better-sqlite3`, WAL mode, migrations in `api/drizzle/` applied at boot
+  (`src/db/migrate.ts`) and via `npm run db:migrate`. Schema so far: `hosts`, `settings` only —
+  deliberately not the full data model below yet, see "Known gotchas."
+- `web/`: React + Vite + TypeScript shell. Fetches `/api/v1/summary` and renders it; no routing,
+  no real dashboard UI yet (Milestone 3).
+- `docker-compose.yml`: two services (`api`, `web`), both `read_only: true` root filesystem,
+  `cap_drop: ALL` + a narrow `cap_add` for the one thing each needs (see "Known gotchas"),
+  `no-new-privileges`, non-root app processes, healthchecks. No Docker socket mounted anywhere
+  — Milestone 1 has no collector.
+- Tests: `api/tests/` (Vitest) covers health routes, config validation, and migrations/schema
+  via an isolated temp-file SQLite per test (`src/test-helpers/db.ts`). `web/` has no test suite
+  yet — nothing with real logic to test until later milestones.
+- CI: `.github/workflows/ci.yml` runs lint + typecheck + test + build for both `api/` and `web/`
+  on push.
+- Verified end-to-end via `docker compose up -d --build`: both containers healthy, web's nginx
+  same-origin-proxies `/api/*` to the api container, data survives an `api` restart, file
+  ownership inside the volume is `node:node` (not root).
+
+### Known gotchas (found during Milestone 1, worth knowing before touching this again)
+
+- **Fresh named Docker volumes are root-owned; non-root containers can't write to them without
+  help.** Both `api` and `web` hit this (SQLite couldn't open its file; nginx couldn't chown its
+  own cache dirs) because `cap_drop: ALL` removes `CAP_CHOWN`/`CAP_SETUID`/`CAP_SETGID` even
+  though the container *starts* as root. Fix: each service's entrypoint runs as root just long
+  enough to `chown` its writable mount, then drops to a non-root user (`su-exec node` for the
+  api; nginx's own official-image entrypoint does this internally for the `nginx` user) — and
+  `docker-compose.yml` explicitly `cap_add`s exactly `CHOWN`, `SETUID`, `SETGID` back (not more)
+  for both services. If you ever see `chown: Operation not permitted` or `SqliteError: unable to
+  open database file` in this project again, this is almost certainly why.
+- **`create-astro`/`npm create vite`-style scaffolding tools install newer majors than a spec
+  might assume.** `eslint-plugin-react-hooks@4.x` (the version obvious to reach for) doesn't
+  support ESLint 9's flat config at all — needed `^5.1.0`. If a fresh `npm install` in `web/`
+  ever fails with an ESLint peer-dependency conflict, check this first.
+- **TypeScript `rootDir` + a single tsconfig doesn't work once you have both `src/` and a
+  sibling `tests/` directory with `strict`/`noEmit` build config.** `api/` splits into
+  `tsconfig.json` (typecheck + lint, includes `src` + `tests`, `noEmit: true`) and
+  `tsconfig.build.json` (extends the base, `rootDir: src`, `include: ["src"]` only, used solely
+  by `npm run build`). Don't collapse these back into one file without re-testing both
+  `npm run typecheck` and `npm run build`.
+- **Host port 8085 for `web`, not 8080.** 8080 is already taken by `monthly-journal-api` if this
+  ever runs on the homelab's actual Docker host (MACMINI) — see the top-level homelab
+  `CLAUDE.md`. Override via `WEB_PORT` in `.env` if needed.
+
+### Not yet deployed anywhere persistent
+
+Milestone 1 was verified locally (`docker compose up`, then torn down + volume removed) — it is
+not currently running as a standing service anywhere. Deciding where/whether to run this
+continuously (most likely MACMINI, since that's the Docker host it's meant to observe) is a
+separate decision, not made as part of this milestone.
+
+---
+
+## Project vision
+
+KangDocker is a personal, local-first **Docker observability and control tower** for a homelab. It gives one person a calm, useful view of whether their services are healthy, why something changed, and what needs attention.
+
+It is deliberately **not a Portainer clone**. The product prioritizes understanding and safe response over complete Docker administration. A user should be able to open the dashboard and answer:
+
+1. Is my homelab healthy?
+2. Which service needs attention, and why?
+3. What changed recently?
+4. Is capacity, backup, or an update becoming a problem?
+
+## Product goals
+
+- Make Docker service health, host capacity, and recent changes obvious in seconds.
+- Be useful on a single Docker host with Docker Compose, without external SaaS.
+- Preserve useful history so the dashboard answers trends, not only current state.
+- Make risky actions explicit, narrow, auditable, and opt-in.
+- Stay practical for a solo developer and modest homelab hardware.
+
+## Non-goals
+
+- Replacing Portainer, Docker Desktop, Kubernetes dashboards, or a full CI/CD system.
+- A general-purpose container/image/volume/network editor.
+- Automatic remediation, automatic upgrades, or arbitrary command execution in the MVP.
+- Cloud accounts, mandatory telemetry, multi-tenancy, or enterprise RBAC.
+- Requiring Prometheus, Grafana, or a separate database cluster for normal setup.
+
+## Product principles
+
+- **Local-first:** all collection, storage, and UI run in the user's homelab by default.
+- **Privacy-first:** no data leaves the host unless a user explicitly configures an integration. Telemetry is opt-in.
+- **Read-only by default:** observation never needs mutation privileges. Any control action is separately enabled and visibly confirmed.
+- **Explain before act:** show the evidence behind health states and recommendations.
+- **Useful over exhaustive:** prioritize signal, clear defaults, and fast navigation over exposing every Docker API field.
+- **Graceful degradation:** missing optional capabilities (logs, update checks, AI, backups) must not break core monitoring.
+- **Composable:** each capability has a small boundary and can be tested independently.
+
+## Primary user and deployment assumptions
+
+The primary user is a technical homelab owner running Docker/Compose on one Linux host, usually behind a reverse proxy. They value low resource use and can edit a Compose file. Start with a single node; do not design the MVP around a cluster.
+
+## MVP scope
+
+Deliver these capabilities first:
+
+1. A dashboard with an overall health score, host CPU/memory/disk summary, and container status list.
+2. Docker container discovery: name, image, state, healthcheck state, uptime, restart count, compose project/service labels, ports, and resource usage.
+3. Per-container detail: current status, recent metrics, lifecycle events, inspect-derived metadata, and a bounded live/recent log view.
+4. Short retention history for host/container metrics and normalized events.
+5. Clear, deterministic health reasons (for example: `unhealthy`, repeated restart, stopped critical service, high CPU, low disk).
+6. Local configuration for monitored/critical services, thresholds, retention, and alert destinations.
+7. Basic alerting with deduplication/cooldown through a generic webhook and optional ntfy/Discord-compatible webhook presets.
+8. Docker Compose deployment, onboarding, health checks, and a read-only security posture.
+
+### Explicit MVP exclusions
+
+- Start/stop/restart/recreate containers from the UI.
+- Pulling images or applying updates.
+- AI log analysis (provide an extension point only).
+- Dependency visualization beyond a simple derived list.
+- Backup provider integrations beyond recording/checking configured backup signals.
+- Authentication beyond an intentional deployment recommendation (reverse proxy auth or local trusted network).
+- Multi-node inventory.
+
+## Phased roadmap
+
+### Phase 0 — Foundation
+
+- Repository skeleton, Compose deployment, configuration, database migrations, structured logging, and health endpoints.
+- Read-only Docker collector and host metrics collector.
+
+### Phase 1 — Useful dashboard (MVP)
+
+- Dashboard, container table/detail, metrics history, event timeline, health scoring, and webhook alerting.
+- Strong empty/error states and sample/demo data for local development.
+
+### Phase 2 — Operations context
+
+- Image/update center: compare running image digest/tag to available image metadata, never pull automatically.
+- Dependency map derived from Compose labels, networks, `depends_on` metadata when available, and user annotations.
+- Backup monitoring: configurable expected backup paths, timestamps, freshness thresholds, and success/failure webhook ingestion.
+- Alert history, silencing/acknowledgement, and notification routing.
+
+### Phase 3 — Assisted diagnosis and guarded control
+
+- Optional AI explain: send only user-selected, redacted log/event context to a user-configured provider; display prompt/context and never run suggested commands automatically.
+- Optional, separately enabled action service for a narrow allowlist such as restart a named container, with confirmation, audit events, and a least-privilege socket proxy.
+
+### Phase 4 — Multi-node
+
+- Per-node agents authenticate to a central web/API service using scoped credentials.
+- Node inventory, node-aware filtering, aggregation, and offline-agent status.
+- Do not begin this phase until the single-node data contracts are stable.
+
+## UX requirements
+
+### Dashboard
+
+The dashboard must be glanceable and work well on desktop and a phone-sized browser. Above the fold show:
+
+- Overall health: Healthy / Attention / Critical, numeric score, and the top 3 contributing reasons.
+- Host capacity cards: CPU, memory, disk (including threshold state and trend when history exists).
+- Service/container summary: running, unhealthy, restarting, stopped critical, and unknown.
+- An attention queue sorted by severity then recency; every row states *what happened* and *why it matters*.
+- A compact recent-events timeline.
+
+Avoid decorative charts. Prefer a number, threshold, and trend. Every warning/score must link to supporting detail.
+
+### Container monitoring
+
+- Group containers by Compose project where labels exist; fall back gracefully for standalone containers.
+- Support search, state/severity filters, and stable sorting.
+- Treat Docker `healthcheck` and container `state` as distinct signals.
+- Mark user-configured critical containers; a stopped or unhealthy critical container has strong impact.
+- Store a container identity that survives rename/recreation analysis: Docker ID, name at observation, image digest when available, Compose project/service, and first/last seen timestamps.
+
+### Metrics and history
+
+- Collect host and container CPU, memory, network I/O, block I/O, and disk where permitted.
+- Use a modest default interval (for example 15–30 seconds), configurable retention, and downsampling/aggregation for older data.
+- Never create an unbounded raw time-series table. Enforce retention in a scheduled job.
+- Charts need time-range selectors and a clear “no data” state.
+
+### Events and timeline
+
+Normalize Docker lifecycle events and derived events (health transitions, threshold crossings, alert sent/failed, collector errors). Record source, timestamp, entity, severity, machine-readable type, human-readable summary, and structured metadata.
+
+### Logs and optional AI explain
+
+- Log viewing is read-only, bounded by time/line count, and streamed/paginated safely.
+- Do not persist all logs by default; persist only explicitly created diagnostic snapshots with retention.
+- The future AI feature is opt-in, must disclose data sent, redact configured secrets/patterns, and return an explanation—not a command executor.
+
+### Update/image center
+
+Show image age, running tag/digest, known newer image metadata when a registry check is configured, and containers affected. “Update available” is informational; it must never pull/recreate containers in Phase 2.
+
+### Dependency map
+
+Present a simple graph/list of observed or declared relationships. Label confidence/source (Compose declaration, shared network, explicit user annotation). Do not imply causal runtime dependencies from shared networks alone.
+
+### Backup monitoring
+
+Backups are external facts, not assumptions. Start with configured filesystem freshness checks and a small authenticated webhook endpoint for backup jobs to report result. Display last success, age, expected frequency, and failure reason.
+
+## Health score
+
+Health must be transparent, deterministic, and configurable—not an opaque AI score.
+
+- Start from 100. Clamp to 0–100.
+- Apply penalties based on active conditions, with defaults documented in config:
+  - critical container stopped/unhealthy: 35
+  - non-critical unhealthy/restarting: 15–25
+  - restart loop within a rolling window: 20
+  - disk above warning/critical threshold: 10/30
+  - sustained host/container CPU or memory threshold: 5–15
+  - stale/failed backup for a required backup target: 20–35
+  - collector/node unavailable: 20
+- Avoid double-counting closely related signals; the score engine should deduplicate by condition/entity.
+- Derive status bands: Healthy (80–100), Attention (50–79), Critical (0–49), configurable.
+- Return the score alongside ordered contributing conditions, penalty values, timestamps, and links/identifiers to evidence.
+
+Write the health score as a pure domain function with fixture-based tests.
+
+## Architecture
+
+Start as a modular monolith with clearly separated processes/modules:
+
+```text
+Docker daemon / host metrics
+        │ read-only collection
+        ▼
+Collector (agent module) ──► API/domain service ──► SQLite storage
+                                      │                    │
+                                      ▼                    ▼
+                                Web UI / REST API     retention jobs
+                                      │
+                                      └──► alert adapters (outbound webhook)
+```
+
+- **Collector/agent:** owns Docker API and host metric access, transforms raw data into versioned observations/events, and has no business/UI logic.
+- **API/domain service:** owns validation, health calculation, retention, configuration, alerts, and query contracts.
+- **Web UI:** read-focused interface using API contracts; it must not talk to the Docker socket directly.
+- **Storage:** SQLite for the MVP, located on a persistent volume. Use migrations, WAL mode, indexes for time/entity queries, backups, and configurable retention.
+- Keep a clean repository layout such as `apps/web`, `apps/api`, `packages/domain`, `packages/shared`, `infra/compose` only if it genuinely reduces coupling. A simpler single application layout is preferred until separation earns its cost.
+
+### API boundaries
+
+Version REST endpoints under `/api/v1`. Use explicit request/response schemas. Core resources:
+
+- `GET /summary`, `/hosts`, `/containers`, `/containers/{id}`, `/containers/{id}/metrics`, `/containers/{id}/events`, `/containers/{id}/logs`
+- `GET /events`, `GET /health`, `GET /images`, `GET /dependencies`, `GET /backups`
+- `GET/PUT /settings` (protected; secrets never returned)
+- `POST /webhooks/backup/{token}` (scoped token; validate payload and rate-limit)
+- `GET /healthz`, `GET /readyz`
+
+Use server-sent events only when polling demonstrably harms UX. Keep initial APIs pull-based and cache-friendly. Do not expose raw Docker inspect payloads as a permanent public contract.
+
+## Docker socket security
+
+The Docker socket is effectively root access. Treat it as the highest-risk integration.
+
+- MVP collector needs only read operations; never mount the socket into the web UI container.
+- Prefer a hardened Docker socket proxy with an allowlist for the exact read endpoints needed. If direct socket mounting is supported for convenience, label it prominently as elevated risk.
+- Run application containers as a non-root user where compatible, use a read-only root filesystem where practical, drop Linux capabilities, and use `no-new-privileges`.
+- Do not expose the Docker daemon TCP socket. Do not store Docker credentials or socket contents in logs.
+- Any later write capability must be its own opt-in service/permission boundary—not an accidental extension of the collector.
+
+## Recommended pragmatic tech stack
+
+Favor a single-language TypeScript stack:
+
+- Node.js LTS + TypeScript, strict mode.
+- Fastify for the API (schema-first validation, low overhead).
+- React + Vite + TypeScript for the web UI; use a small component system and accessible primitives rather than building a design system.
+- SQLite via a mature migration-capable library/ORM (for example Drizzle) and `better-sqlite3` where deployment constraints allow.
+- Docker Engine API client (`dockerode` or a thin typed client) and Node OS metrics library/native `/proc` reader behind an adapter.
+- Vitest for unit/integration tests, Playwright for a small set of critical UI journeys, ESLint + Prettier, and Docker Compose for deployment.
+
+This is a recommendation, not a mandate. If an existing repository already has a coherent stack, inspect it first and extend it unless the mismatch is material. Avoid microservices, message queues, Kubernetes, Redis, Prometheus, and GraphQL in the MVP.
+
+## Data model (initial)
+
+Use migrations and explicit timestamps in UTC. Suggested entities:
+
+- `hosts`: id, name, status, first_seen_at, last_seen_at, metadata JSON.
+- `containers`: id, host_id, docker_id, current_name, compose_project, compose_service, image_ref, image_digest, critical, first_seen_at, last_seen_at, current_state, current_health.
+- `metric_samples`: id, host_id nullable, container_id nullable, observed_at, cpu_percent, memory_bytes, memory_limit_bytes, net_rx_bytes, net_tx_bytes, block_read_bytes, block_write_bytes, disk_used_bytes, disk_total_bytes.
+- `events`: id, host_id, container_id nullable, occurred_at, source, type, severity, summary, metadata JSON, dedupe_key.
+- `health_conditions`: id, entity_type, entity_id, code, severity, penalty, active, detected_at, resolved_at, evidence JSON.
+- `alerts`: id, condition_id, destination, status, sent_at, error, dedupe_key.
+- `backup_targets` and `backup_runs`: target configuration plus observed outcome/freshness.
+- `settings`: non-secret settings only. Store secrets in mounted environment/config files or an encrypted secret mechanism; never in browser-visible settings responses.
+
+Use foreign keys, index `(container_id, observed_at)`, `(host_id, observed_at)`, and event time/severity queries. Consider aggregated metric tables before raw history becomes expensive.
+
+**Milestone 1 note:** only `hosts` and `settings` exist so far — see "Current State" above for why the rest is deferred, not skipped.
+
+## Testing strategy
+
+- Unit-test pure domain logic: health scoring, threshold evaluation, retention selection, event normalization, redaction, and alert deduplication.
+- Integration-test API endpoints against an isolated SQLite database and mocked Docker/host adapters.
+- Contract-test adapter outputs with recorded Docker API fixtures; never require a developer's real Docker daemon in CI.
+- End-to-end test critical journeys: dashboard attention state, container detail, configuration change, and webhook backup result.
+- Test failure modes: Docker unavailable, incomplete stats, corrupt/old migration, database full, registry timeout, alert failure.
+- Keep test fixtures small, named, and representative of Compose labels and container state transitions.
+
+## Application observability
+
+- Emit structured JSON logs with request/correlation IDs; redact authorization headers, webhook tokens, environment values, and log payload secrets.
+- Expose `/healthz` for process liveness and `/readyz` for database/collector readiness.
+- Record collector failures as visible system events rather than silently retrying forever.
+- Maintain lightweight internal metrics/counters (collection duration, errors, DB size, event queue/alert outcomes) and display diagnostics in a settings/status screen before adding external metrics integrations.
+
+## Deployment
+
+- Ship an example `compose.yml`, `.env.example`, and concise setup/troubleshooting documentation.
+- Persist SQLite data in a named volume or documented host path; support explicit backup guidance.
+- Pin image versions in examples. Include container healthchecks.
+- Bind locally by default or clearly document reverse-proxy/TLS setup. Do not expose an unauthenticated dashboard directly to the internet.
+- Make configuration reload/restart behavior explicit.
+- Provide a small demo mode or fixtures so contributors can work without Docker access.
+
+## Security checklist
+
+Before calling a feature complete, verify:
+
+- [ ] Docker socket access is read-only/allowlisted and absent from the UI container.
+- [ ] No secrets appear in API responses, browser bundles, logs, events, diagnostics, or error messages.
+- [ ] Webhook endpoints use high-entropy scoped tokens, payload validation, rate limiting, and event deduplication.
+- [ ] Settings endpoints are protected in the chosen deployment model.
+- [ ] Inputs are schema-validated; SQL is parameterized; UI output is escaped by default.
+- [ ] Dependencies are pinned/updated deliberately and security-relevant changes are noted.
+- [ ] Retention/deletion behavior is documented and does not erase needed configuration.
+- [ ] Optional AI/network integrations are disabled by default and disclose outbound data.
+
+## Coding conventions
+
+- TypeScript strict mode; avoid `any`, hidden global state, and untyped JSON at boundaries.
+- Keep domain logic framework-independent and side effects behind interfaces/adapters.
+- Prefer small functions and explicit names over clever abstractions.
+- Validate all external data at the boundary: Docker API, HTTP, environment, database JSON.
+- UTC in storage/API; format times only in the UI.
+- Use conventional HTTP statuses and structured error responses.
+- Do not add a dependency for a trivial utility. Do not introduce a new architectural layer without a concrete current need.
+- Add comments for non-obvious decisions, especially Docker semantics and security tradeoffs; do not narrate obvious code.
+
+## Git workflow
+
+- Work in small, focused commits using Conventional Commit-style messages, e.g. `feat(health): add deterministic score calculation`.
+- Do not mix formatting, refactors, and behavior changes without a reason.
+- Update documentation/config examples in the same change when behavior or setup changes.
+- Before committing, run the relevant formatter, type checks, and targeted tests. Do not discard unrelated working-tree changes.
+
+## Definition of done
+
+A feature is done only when it:
+
+- Meets an explicitly stated user-facing behavior and has an understandable empty/error state.
+- Has schema validation and authorization/security implications considered.
+- Includes relevant unit/integration coverage and passes formatting, type checking, and tests.
+- Adds migrations/indexes/retention behavior where persistent data is involved.
+- Emits useful diagnostics without leaking secrets.
+- Updates API/config/docs when contracts change.
+- Can be independently exercised without requiring unfinished roadmap work.
+
+## Instructions for Claude Code
+
+1. **Inspect before changing.** Read the repository structure, existing docs, package manifests, configuration, migrations, tests, and git status before proposing or editing code. Treat this file as guidance; existing project conventions win when they are coherent.
+2. **Work incrementally.** State the smallest useful next slice, implement it, run focused verification, and report what changed plus what remains. Do not attempt all roadmap phases at once.
+3. **Avoid overengineering.** Choose the simplest implementation that satisfies the current milestone. No speculative plugin systems, queues, distributed architecture, or generic abstractions.
+4. **Keep features independently testable.** Put business rules behind pure functions/interfaces, mock Docker/host/network dependencies, and ship each vertical slice with focused tests.
+5. **Respect the trust boundary.** Never add Docker write access, shell execution, external calls, or data collection beyond stated scope without explicitly surfacing the tradeoff and obtaining direction.
+6. **Document decisions.** For material choices, add a brief entry to `docs/decisions/` (or the project’s established equivalent) covering context, choice, alternatives, and consequences. Do not create ceremonial ADRs for trivial implementation details.
+7. **Protect existing work.** Do not overwrite/remove user changes or reformat unrelated files. If the worktree is dirty, limit edits to the requested surface and call out overlap risks.
+8. **Verify honestly.** Run the narrowest relevant checks first, then broader checks when appropriate. State anything not run and why; never claim Docker integration was verified without an isolated fixture or real configured daemon.
+
+## Initial implementation plan
+
+### Milestone 1 — Runnable foundation
+
+Outcome: a local Compose deployment starts a web/API service, has persistent SQLite storage, returns health/readiness endpoints, and displays a basic shell UI.
+
+First tasks:
+
+1. Inspect or establish the minimal repository structure and TypeScript tooling.
+2. Add configuration parsing/validation, `.env.example`, and a non-secret settings model.
+3. Add SQLite migration runner, initial schema, WAL configuration, and a repository test helper.
+4. Add Fastify app with `/healthz`, `/readyz`, and a typed `/api/v1/summary` placeholder.
+5. Add Compose deployment with persistent data, process healthcheck, non-root runtime where feasible, and no Docker socket yet.
+6. Add lint, typecheck, unit-test commands and CI-friendly fixture/demo mode.
+
+### Milestone 2 — Read-only collection and visibility
+
+Outcome: the user can see current host/container facts safely.
+
+1. Implement a Docker read adapter using fixtures first; list/inspect/events/stats only.
+2. Implement host metrics adapter and a collection loop with bounded timeouts/retries.
+3. Persist normalized container observations, current states, and lifecycle events.
+4. Implement dashboard summary/container list/detail APIs and a simple responsive UI.
+5. Add read-only socket-proxy/direct-socket deployment guidance and security tests/checklist.
+
+### Milestone 3 — Health and history
+
+Outcome: the dashboard explains attention and shows recent trends.
+
+1. Implement pure health-condition and score engine with fixtures.
+2. Persist metric samples, chart queries, retention job, and downsampling strategy.
+3. Add attention queue, evidence links, container detail charts, and event timeline.
+4. Add user configuration for critical services and thresholds.
+
+### Milestone 4 — Notification and operational context
+
+Outcome: meaningful issues are surfaced beyond the browser.
+
+1. Implement webhook alert destination, cooldown/deduplication, delivery records, and tests.
+2. Add backup target freshness checks plus authenticated backup-result webhook.
+3. Add image metadata/update center behind explicit registry configuration.
+4. Add a conservative dependency view with source/confidence labels.
+
+### Milestone 5 — Harden and release
+
+Outcome: a trustworthy first release for a real homelab.
+
+1. Complete security review/checklist and privilege-minimizing Compose defaults.
+2. Test upgrades/migrations, database persistence, unavailable Docker, and alert failures.
+3. Write install, reverse-proxy/auth, backup, retention, and troubleshooting docs.
+4. Test on a real non-production homelab with a rollback plan; capture follow-up issues before expanding scope.

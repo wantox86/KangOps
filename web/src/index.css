@@ -1,0 +1,32 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #0b0f14;
+  color: #e6edf3;
+}
+
+.shell {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+.tagline {
+  color: #9aa7b1;
+}
+
+.summary-card {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid #232b33;
+  border-radius: 8px;
+  background: #11161c;
+}
+
+.error {
+  color: #ff6b6b;
+}

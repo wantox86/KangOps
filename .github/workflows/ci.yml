@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  api:
+    name: API (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  web:
+    name: Web (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+
+  compose-smoke-test:
+    name: Docker Compose smoke test
+    runs-on: ubuntu-latest
+    needs: [api, web]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --build
+      - name: Wait for both services to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            api_status=$(docker inspect -f '{{.State.Health.Status}}' kangdocker-api-1 2>/dev/null || echo "starting")
+            web_status=$(docker inspect -f '{{.State.Health.Status}}' kangdocker-web-1 2>/dev/null || echo "starting")
+            echo "api=$api_status web=$web_status"
+            if [ "$api_status" = "healthy" ] && [ "$web_status" = "healthy" ]; then exit 0; fi
+            sleep 2
+          done
+          echo "Services never became healthy" >&2
+          docker compose logs
+          exit 1
+      - name: Hit the summary endpoint through the web proxy
+        run: |
+          curl -sf http://localhost:8085/api/v1/summary | grep -q '"healthStatus"'
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs

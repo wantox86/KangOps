@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+# Anchored to root -- an unanchored "data/" would also match any future nested "data/" folder
+# under api/src or web/src. Learned this the hard way with an unanchored "DB/" pattern
+# elsewhere silently excluding a same-named nested code folder (case-insensitive match on
+# macOS) -- see copilot-chat-history's .gitignore fix, 2026-08-25.
+/data/
+.env
+.DS_Store
+*.log
+*.tsbuildinfo
