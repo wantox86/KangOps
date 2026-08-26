@@ -241,6 +241,382 @@ function AttentionQueue({ onSelect }: { onSelect: (containerId: string) => void 
   );
 }
 
+// ---- Milestone 4: notification + operational context -------------------------------------
+
+interface WebhookConfigResponse {
+  enabled: boolean;
+  urlMasked: string | null;
+  format: "generic" | "discord" | "ntfy";
+  cooldownMinutes: number;
+}
+
+interface AlertRecord {
+  id: number;
+  code: string;
+  severity: string;
+  status: string;
+  summary: string;
+  sentAt: string;
+  error: string | null;
+}
+
+function WebhookSettingsPanel(): React.JSX.Element {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const config = useJsonFetch<WebhookConfigResponse>("/api/v1/settings/webhook", [refreshKey]);
+  const alertsState = useJsonFetch<{ items: AlertRecord[] }>("/api/v1/alerts", [refreshKey]);
+  const [enabled, setEnabled] = useState(false);
+  const [url, setUrl] = useState("");
+  const [format, setFormat] = useState<WebhookConfigResponse["format"]>("generic");
+  const [cooldownMinutes, setCooldownMinutes] = useState(30);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (config.status === "ready") {
+      setEnabled(config.data.enabled);
+      setFormat(config.data.format);
+      setCooldownMinutes(config.data.cooldownMinutes);
+    }
+  }, [config]);
+
+  async function save(): Promise<void> {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await fetch("/api/v1/settings/webhook", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled, url, format, cooldownMinutes }),
+      });
+      if (!response.ok) {
+        const body = (await response.json()) as { message?: string };
+        throw new Error(body.message ?? `HTTP ${response.status}`);
+      }
+      setUrl("");
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="ops-panel">
+      <h3>Webhook alerts</h3>
+      {config.status === "ready" && (
+        <p className="tagline">
+          Currently {config.data.enabled ? "enabled" : "disabled"}
+          {config.data.urlMasked ? ` — ${config.data.urlMasked}` : ""}. Sends on newly-opened attention/critical conditions,
+          cooldown {config.data.cooldownMinutes}m.
+        </p>
+      )}
+      <div className="form-row">
+        <label>
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled
+        </label>
+        <input type="url" placeholder="https://... (leave blank to keep current)" value={url} onChange={(e) => setUrl(e.target.value)} />
+        <select value={format} onChange={(e) => setFormat(e.target.value as WebhookConfigResponse["format"])}>
+          <option value="generic">generic JSON</option>
+          <option value="discord">Discord</option>
+          <option value="ntfy">ntfy</option>
+        </select>
+        <input type="number" min={1} value={cooldownMinutes} onChange={(e) => setCooldownMinutes(Number(e.target.value))} title="Cooldown minutes" />
+        <button type="button" disabled={saving} onClick={() => void save()}>
+          Save
+        </button>
+      </div>
+      {saveError && <p className="error">{saveError}</p>}
+      <p className="tagline">
+        Note: enabling with a blank URL only works if a URL was already saved before — this form never shows the saved URL back
+        (it&apos;s treated as a secret).
+      </p>
+
+      <h4>Recent deliveries</h4>
+      {alertsState.status === "ready" && alertsState.data.items.length === 0 && <p className="tagline">No alerts sent yet.</p>}
+      {alertsState.status === "ready" && alertsState.data.items.length > 0 && (
+        <ul className="event-list">
+          {alertsState.data.items.map((a) => (
+            <li key={a.id}>
+              <SeverityBadge severity={a.severity} /> <span className={`badge badge-${a.status === "sent" ? "good" : "bad"}`}>{a.status}</span>{" "}
+              {a.summary} {a.error ? `(${a.error})` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+interface BackupTargetItem {
+  id: number;
+  name: string;
+  expectedFrequencyMinutes: number;
+  checkPath: string | null;
+  enabled: boolean;
+  tokenMasked: string;
+  lastSuccessAt: string | null;
+  lastRunWasFailure: boolean;
+}
+
+function BackupTargetsPanel(): React.JSX.Element {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const targets = useJsonFetch<{ items: BackupTargetItem[] }>("/api/v1/backup-targets", [refreshKey]);
+  const [name, setName] = useState("");
+  const [expectedFrequencyMinutes, setExpectedFrequencyMinutes] = useState(1440);
+  const [checkPath, setCheckPath] = useState("");
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  async function create(): Promise<void> {
+    setCreateError(null);
+    try {
+      const response = await fetch("/api/v1/backup-targets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, expectedFrequencyMinutes, checkPath: checkPath || null }),
+      });
+      if (!response.ok) {
+        const body = (await response.json()) as { message?: string };
+        throw new Error(body.message ?? `HTTP ${response.status}`);
+      }
+      const created = (await response.json()) as { token: string };
+      setNewToken(created.token);
+      setName("");
+      setCheckPath("");
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
+  async function remove(id: number): Promise<void> {
+    await fetch(`/api/v1/backup-targets/${id}`, { method: "DELETE" });
+    setRefreshKey((k) => k + 1);
+  }
+
+  return (
+    <section className="ops-panel">
+      <h3>Backup targets</h3>
+      <p className="tagline">
+        Freshness is checked each collector cycle (filesystem mtime and/or reported webhook results); stale/failed/missing
+        backups feed the health score just like any other condition.
+      </p>
+
+      {newToken && (
+        <p className="token-callout">
+          Target created. Auth token (shown once, copy it now): <code>{newToken}</code>
+          <button type="button" onClick={() => setNewToken(null)}>
+            Dismiss
+          </button>
+        </p>
+      )}
+
+      <div className="form-row">
+        <input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} />
+        <input type="number" min={1} value={expectedFrequencyMinutes} onChange={(e) => setExpectedFrequencyMinutes(Number(e.target.value))} title="Expected frequency (minutes)" />
+        <input placeholder="filesystem check path (optional)" value={checkPath} onChange={(e) => setCheckPath(e.target.value)} />
+        <button type="button" disabled={!name} onClick={() => void create()}>
+          Add target
+        </button>
+      </div>
+      {createError && <p className="error">{createError}</p>}
+
+      {targets.status === "ready" && targets.data.items.length === 0 && <p className="tagline">No backup targets configured yet.</p>}
+      {targets.status === "ready" && targets.data.items.length > 0 && (
+        <ul className="event-list">
+          {targets.data.items.map((t) => (
+            <li key={t.id}>
+              <strong>{t.name}</strong> — expected every {t.expectedFrequencyMinutes}m — token {t.tokenMasked} —{" "}
+              {t.lastRunWasFailure ? (
+                <span className="badge badge-bad">last run failed</span>
+              ) : t.lastSuccessAt ? (
+                `last success ${t.lastSuccessAt}`
+              ) : (
+                <span className="badge badge-neutral">no reports yet</span>
+              )}{" "}
+              <button type="button" className="link-btn" onClick={() => void remove(t.id)}>
+                delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+interface ImageItem {
+  dockerId: string;
+  name: string;
+  imageRef: string;
+  currentDigest: string | null;
+  registryChecked: boolean;
+  registrySupported: boolean | null;
+  latestDigest: string | null;
+  updateAvailable: boolean | null;
+  checkError: string | null;
+}
+
+function ImagesPanel(): React.JSX.Element {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const images = useJsonFetch<{ registryCheckEnabled: boolean; items: ImageItem[] }>("/api/v1/images", [refreshKey]);
+  const [saving, setSaving] = useState(false);
+
+  async function toggleRegistryChecks(next: boolean): Promise<void> {
+    setSaving(true);
+    try {
+      await fetch("/api/v1/settings/registry", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: next }) });
+      setRefreshKey((k) => k + 1);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="ops-panel">
+      <h3>Images / update center</h3>
+      <p className="tagline">
+        Registry checks are opt-in and only query public, unauthenticated Docker Hub tags — never auto-connects to a registry.
+        Non-Docker-Hub images always show as "not checked".
+      </p>
+      {images.status === "ready" && (
+        <label>
+          <input type="checkbox" disabled={saving} checked={images.data.registryCheckEnabled} onChange={(e) => void toggleRegistryChecks(e.target.checked)} />{" "}
+          Enable Docker Hub registry checks
+        </label>
+      )}
+      {images.status === "ready" && (
+        <ul className="event-list">
+          {images.data.items.map((i) => (
+            <li key={i.dockerId}>
+              <strong>{i.name}</strong> ({i.imageRef}) —{" "}
+              {i.updateAvailable === true && <span className="badge badge-neutral">update available</span>}
+              {i.updateAvailable === false && <span className="badge badge-good">up to date</span>}
+              {i.updateAvailable === null && (i.registrySupported === false ? "not checked (unsupported registry)" : "not checked")}
+              {i.checkError && <span className="tagline"> ({i.checkError})</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+interface DependencyGroup {
+  composeProject: string;
+  confidence: string;
+  note: string;
+  containerIds: string[];
+}
+
+interface DependencyAnnotationItem {
+  id: number;
+  fromContainerId: string;
+  toContainerId: string;
+  note: string | null;
+  confidence: string;
+}
+
+function DependenciesPanel({ containers }: { containers: ContainerSummary[] }): React.JSX.Element {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const view = useJsonFetch<{ groups: DependencyGroup[]; annotations: DependencyAnnotationItem[] }>("/api/v1/dependencies", [refreshKey]);
+  const [fromId, setFromId] = useState("");
+  const [toId, setToId] = useState("");
+  const [note, setNote] = useState("");
+
+  function nameFor(id: string): string {
+    return containers.find((c) => c.dockerId === id)?.name ?? id;
+  }
+
+  async function addAnnotation(): Promise<void> {
+    if (!fromId || !toId) return;
+    await fetch("/api/v1/dependencies/annotations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fromContainerId: fromId, toContainerId: toId, note: note || null }),
+    });
+    setNote("");
+    setRefreshKey((k) => k + 1);
+  }
+
+  async function removeAnnotation(id: number): Promise<void> {
+    await fetch(`/api/v1/dependencies/annotations/${id}`, { method: "DELETE" });
+    setRefreshKey((k) => k + 1);
+  }
+
+  return (
+    <section className="ops-panel">
+      <h3>Dependencies</h3>
+      <p className="tagline">
+        Conservative by design: Compose-project grouping is labeled "weak" and never implies an actual runtime dependency;
+        only explicitly declared annotations below are treated as a real relationship.
+      </p>
+
+      {view.status === "ready" && view.data.groups.length > 0 && (
+        <ul className="event-list">
+          {view.data.groups.map((g) => (
+            <li key={g.composeProject}>
+              <span className="badge badge-neutral">{g.confidence}</span> Compose project <strong>{g.composeProject}</strong>:{" "}
+              {g.containerIds.map(nameFor).join(", ")} — <span className="tagline">{g.note}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="form-row">
+        <select value={fromId} onChange={(e) => setFromId(e.target.value)}>
+          <option value="">from…</option>
+          {containers.map((c) => (
+            <option key={c.dockerId} value={c.dockerId}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <select value={toId} onChange={(e) => setToId(e.target.value)}>
+          <option value="">to…</option>
+          {containers.map((c) => (
+            <option key={c.dockerId} value={c.dockerId}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <input placeholder="note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+        <button type="button" disabled={!fromId || !toId} onClick={() => void addAnnotation()}>
+          Add annotation
+        </button>
+      </div>
+
+      {view.status === "ready" && view.data.annotations.length === 0 && <p className="tagline">No declared dependencies yet.</p>}
+      {view.status === "ready" && view.data.annotations.length > 0 && (
+        <ul className="event-list">
+          {view.data.annotations.map((a) => (
+            <li key={a.id}>
+              <span className="badge badge-good">{a.confidence}</span> {nameFor(a.fromContainerId)} → {nameFor(a.toContainerId)}
+              {a.note ? ` — ${a.note}` : ""}{" "}
+              <button type="button" className="link-btn" onClick={() => void removeAnnotation(a.id)}>
+                remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function OperationsSection({ containers }: { containers: ContainerSummary[] }): React.JSX.Element {
+  return (
+    <section className="operations-section">
+      <h2>Operations</h2>
+      <WebhookSettingsPanel />
+      <BackupTargetsPanel />
+      <ImagesPanel />
+      <DependenciesPanel containers={containers} />
+    </section>
+  );
+}
+
 export function App(): React.JSX.Element {
   const [refreshKey, setRefreshKey] = useState(0);
   const summary = useJsonFetch<SummaryResponse>("/api/v1/summary", [refreshKey]);
@@ -254,7 +630,7 @@ export function App(): React.JSX.Element {
   return (
     <main className="shell">
       <h1>KangDocker</h1>
-      <p className="tagline">Local-first Docker observability — Milestone 3: health scoring and history.</p>
+      <p className="tagline">Local-first Docker observability — Milestone 4: notification and operational context.</p>
 
       {summary.status === "loading" && <p>Loading summary…</p>}
       {summary.status === "error" && <p className="error">Could not reach the API: {summary.message}</p>}
@@ -308,6 +684,8 @@ export function App(): React.JSX.Element {
       )}
 
       {selectedId && <ContainerDetailPanel id={selectedId} onClose={() => setSelectedId(null)} onChanged={refresh} />}
+
+      <OperationsSection containers={containersState.status === "ready" ? containersState.data.containers : []} />
     </main>
   );
 }

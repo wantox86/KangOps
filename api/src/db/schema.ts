@@ -1,10 +1,13 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // Milestone 1 added hosts/settings. Milestone 2 added containers (current observed state) and
-// events (normalized lifecycle events). Milestone 3 adds metric_samples (+ an hourly downsampled
-// table) and health_conditions -- enough for time-series charts, retention, and a deterministic
-// health/attention engine. alerts/backup_* are still deferred to Milestone 4 (see CLAUDE.md).
+// events (normalized lifecycle events). Milestone 3 added metric_samples (+ an hourly
+// downsampled table) and health_conditions -- enough for time-series charts, retention, and a
+// deterministic health/attention engine. Milestone 4 adds alerts (webhook delivery records),
+// backup_targets/backup_runs, image_metadata, and dependency_annotations -- see this file's
+// Current State section for how each stays narrow/conservative rather than matching the spec's
+// suggested columns verbatim.
 
 export const hosts = sqliteTable("hosts", {
   id: text("id").primaryKey(),
@@ -159,6 +162,129 @@ export const healthConditions = sqliteTable(
     activeIdx: index("health_conditions_active_idx").on(table.active, table.detectedAt),
   }),
 );
+
+// Delivery record for a webhook alert -- deliberately denormalized (entityType/entityId/code
+// rather than a health_conditions FK) since a resolved condition's alert history should still
+// read sensibly even though health_conditions rows are never deleted, only marked inactive; a
+// plain FK would work too, but this mirrors metric_samples' "avoid a column that only makes
+// sense per-adapter" spirit -- alerts should be understandable on their own. dedupeKey is the
+// same `entityType:entityId:code` shape reconcile.ts already uses internally, reused here so
+// alerts/notifier.ts can look up "when did we last alert on this" with one indexed query.
+export const alerts = sqliteTable(
+  "alerts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    code: text("code").notNull(),
+    severity: text("severity").notNull(),
+    destination: text("destination").notNull(),
+    status: text("status").notNull(),
+    summary: text("summary").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    sentAt: text("sent_at").notNull(),
+    error: text("error"),
+  },
+  (table) => ({
+    dedupeKeySentAtIdx: index("alerts_dedupe_key_sent_at_idx").on(table.dedupeKey, table.sentAt),
+  }),
+);
+
+// A user-configured backup signal to watch freshness of -- either filesystem-checked (checkPath)
+// or purely webhook-reported (checkPath null), matching the spec's "configured filesystem
+// freshness checks and a small authenticated webhook endpoint". token is the high-entropy
+// scoped credential the external backup job authenticates its POST with (per CLAUDE.md's
+// security checklist); it is generated once at creation time and returned in that response
+// only -- GET /api/v1/backup-targets always masks it, same principle as never returning secrets
+// from settings endpoints.
+export const backupTargets = sqliteTable(
+  "backup_targets",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    expectedFrequencyMinutes: integer("expected_frequency_minutes").notNull(),
+    checkPath: text("check_path"),
+    token: text("token").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    tokenIdx: uniqueIndex("backup_targets_token_idx").on(table.token),
+  }),
+);
+
+// One row per reported/observed backup outcome. source is "webhook" for everything reported via
+// POST /api/v1/webhooks/backup/:token; filesystem freshness (checkPath) is evaluated live from
+// file mtime each cycle (backups/gather.ts) rather than synthesizing a run row every tick, so
+// this table only grows on real reported events, not on every 20s collector cycle.
+export const backupRuns = sqliteTable(
+  "backup_runs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    targetId: integer("target_id")
+      .notNull()
+      .references(() => backupTargets.id),
+    occurredAt: text("occurred_at").notNull(),
+    status: text("status").notNull(),
+    message: text("message"),
+    source: text("source").notNull(),
+  },
+  (table) => ({
+    targetOccurredIdx: index("backup_runs_target_occurred_idx").on(table.targetId, table.occurredAt),
+  }),
+);
+
+// Cached registry-check result per observed image ref ("repo:tag") -- Milestone 4's image/update
+// center. Only populated when a user explicitly enables registry checks (settings key
+// "registry_check_config"); never auto-connects to a registry, per CLAUDE.md's opt-in
+// requirement. Only Docker Hub public (unauthenticated) image lookups are supported -- see
+// images/parseRef.ts for why other registries are deliberately left unsupported rather than
+// half-implemented.
+export const imageMetadata = sqliteTable("image_metadata", {
+  imageRef: text("image_ref").primaryKey(),
+  registrySupported: integer("registry_supported", { mode: "boolean" }).notNull(),
+  latestDigest: text("latest_digest"),
+  updateAvailable: integer("update_available", { mode: "boolean" }),
+  lastCheckedAt: text("last_checked_at"),
+  checkError: text("check_error"),
+  createdAt: text("created_at").notNull(),
+});
+
+// Explicit user-declared relationship between two containers -- the *only* source of edges in
+// the dependency view (see dependencies/view.ts). Deliberately does not infer edges from shared
+// networks or depends_on labels: the read adapter doesn't collect network membership today, and
+// the spec explicitly warns against implying causal runtime dependencies from shared networks
+// alone -- Compose-project co-membership is surfaced separately in the API as a labeled "weak,
+// not causal" grouping computed directly from containers.composeProject, not stored here.
+export const dependencyAnnotations = sqliteTable(
+  "dependency_annotations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    fromContainerId: text("from_container_id")
+      .notNull()
+      .references(() => containers.dockerId),
+    toContainerId: text("to_container_id")
+      .notNull()
+      .references(() => containers.dockerId),
+    note: text("note"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    fromIdx: index("dependency_annotations_from_idx").on(table.fromContainerId),
+    toIdx: index("dependency_annotations_to_idx").on(table.toContainerId),
+  }),
+);
+
+export type Alert = typeof alerts.$inferSelect;
+export type NewAlert = typeof alerts.$inferInsert;
+export type BackupTarget = typeof backupTargets.$inferSelect;
+export type NewBackupTarget = typeof backupTargets.$inferInsert;
+export type BackupRun = typeof backupRuns.$inferSelect;
+export type NewBackupRun = typeof backupRuns.$inferInsert;
+export type ImageMetadataRow = typeof imageMetadata.$inferSelect;
+export type NewImageMetadataRow = typeof imageMetadata.$inferInsert;
+export type DependencyAnnotation = typeof dependencyAnnotations.$inferSelect;
+export type NewDependencyAnnotation = typeof dependencyAnnotations.$inferInsert;
 
 export type Host = typeof hosts.$inferSelect;
 export type NewHost = typeof hosts.$inferInsert;

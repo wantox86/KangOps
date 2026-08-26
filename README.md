@@ -3,9 +3,13 @@
 Local-first Docker observability and control tower for a homelab. Not a Portainer clone —
 prioritizes understanding ("is my homelab healthy, and why") over full Docker administration.
 
-**Status: Milestone 2 (Read-only collection and visibility) complete.** The API now collects
-real container facts on a bounded interval and persists them; the dashboard shows real counts
-and a container list/detail. Health scoring/history/alerting are still ahead (Milestone 3+).
+**Status: Milestone 4 (Notification and operational context) complete.** The API collects real
+container facts, scores health/history (Milestone 3), and now also sends webhook alerts on new
+attention/critical conditions, checks configured backup targets for freshness (filesystem mtime
+and/or an authenticated result webhook), optionally checks Docker Hub for newer image digests
+(opt-in, off by default), and shows a conservative dependency view (Compose-project grouping
+labeled "weak", plus explicit user annotations labeled "declared"). See `CLAUDE.md`'s "Current
+State" for full details.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the full product spec, architecture, and roadmap.
 
@@ -78,8 +82,22 @@ root on the host), so:
       `api/src/collector/loop.ts` and its tests.
 - [x] Raw Docker `inspect`/`stats` payloads are never returned by the API; only the normalized
       `NormalizedContainer`/container-row shape is exposed.
-- [ ] Settings/API auth — still out of scope until a later milestone (no write endpoints exist
-      yet either).
+- [ ] Settings/API auth — still out of scope until a later milestone.
+
+### Milestone 4 additions
+
+- [x] Webhook URL is never returned by `GET /api/v1/settings/webhook` — only a masked
+      scheme+host (`alerts/webhookConfigRepo.ts`'s `maskWebhookUrl`).
+- [x] Backup-result webhook (`POST /api/v1/webhooks/backup/:token`) uses a high-entropy
+      (32-byte) per-target token as its only auth, is rate-limited per token
+      (`backups/rateLimiter.ts`), and the token is only ever returned once, at target-creation
+      time — `GET /api/v1/backup-targets` always masks it.
+- [x] Registry/image checks are opt-in (`registry_check_config`, default `false`) and only ever
+      call Docker Hub's public, unauthenticated API for images it can positively parse as a
+      Docker Hub reference — never an implicit/default-on network call.
+- [x] Dependency view never infers edges from shared networks (not even collected) — only
+      Compose-project co-membership (explicitly labeled non-causal) and explicit user
+      annotations.
 
 ## Checks
 

@@ -7,6 +7,108 @@
 
 ## Current State
 
+**Milestone 4 (Notification and operational context) — complete, 2026-08-26.**
+
+- `api/src/alerts/`: webhook alert destination. `types.ts`/`webhookConfigRepo.ts` store one
+  config (`enabled`, `url`, `format: generic|discord|ntfy`, `cooldownMinutes`) as settings-table
+  JSON (key `alert_webhook_config`), same pattern as `health/thresholdsRepo.ts` — `GET
+  /api/v1/settings/webhook` never returns the raw url, only `maskWebhookUrl`'s
+  scheme+host+`/***` (the url is effectively a bearer credential for ntfy/Discord). `format.ts`
+  is a pure payload builder per destination (fixture-tested), `dispatch.ts` is the only impure
+  piece (bounded `fetch` with `AbortController`, mirrors `collector/loop.ts`'s timeout pattern),
+  `cooldown.ts` is a pure `shouldSendAlert` helper, and `notifier.ts` (`dispatchAlerts`) wires
+  them together: called from `health/cycle.ts` with exactly the conditions `reconcile.ts` just
+  decided are newly-opened this cycle (not every active condition), so "deduplication" is mostly
+  free — `cooldownMinutes` additionally guards a flapping condition from re-alerting every
+  resolve/reopen. Every attempt (sent or failed) is persisted to the new `alerts` table
+  (denormalized entityType/entityId/code/summary, not an FK to `health_conditions`, so alert
+  history reads sensibly even though conditions are never deleted). A webhook failure is
+  recorded + logged, never thrown — cannot fail the collector cycle that triggered it.
+- `api/src/backups/`: backup target freshness + authenticated result webhook. `backup_targets`
+  (name, `expectedFrequencyMinutes`, optional `checkPath`, a 32-byte hex `token` generated once
+  at creation and only ever returned in that one response) and `backup_runs` (one row per
+  reported webhook result; filesystem freshness is evaluated live from mtime each cycle in
+  `gather.ts`, never persisted as a row, so the table only grows on real reported events, not
+  every ~20s tick). `freshness.ts`'s `evaluateBackupHealth` is a pure function (fixture-tested)
+  producing the same `HealthConditionInput` shape `health/engine.ts` uses — codes
+  `backup_stale` (1.5x/3x `expectedFrequencyMinutes` → warning 20/critical 35),
+  `backup_missing` (never reported, first window elapsed → critical 35), `backup_failed` (most
+  recent reported run was a failure → critical 35). `health/cycle.ts` merges these into the same
+  conditions list as host/container conditions before one shared
+  reconcile+persist+`summarizeConditions` pass — `health/engine.ts` itself stays untouched/
+  host+container-only. `POST /api/v1/webhooks/backup/:token` matches the spec's exact
+  `POST /webhooks/backup/{token}` shape; the token *is* the auth (no separate header scheme),
+  rate-limited per token (`backups/rateLimiter.ts`, a hand-rolled in-memory fixed-window
+  limiter — not a dependency, this is a few lines for one low-traffic endpoint) at 10 req/min.
+- `api/src/images/`: opt-in image/update center, off by default
+  (`images/registryConfigRepo.ts`'s `registry_check_config`, same settings-table pattern).
+  `parseRef.ts` recognizes *only* Docker Hub image references (`nginx`, `user/repo[:tag]`) —
+  anything with a host-looking first path segment (`ghcr.io/...`, `host:port/...`, `localhost/
+  ...`) is reported as an unsupported registry rather than silently skipped or half-implemented;
+  multi-registry auth is real scope this milestone deliberately doesn't take on.
+  `dockerHubClient.ts` calls Docker Hub's public v2 API, unauthenticated, only ever invoked from
+  `images/check.ts` when the opt-in flag is true, throttled per-image to once per 6h
+  (`RECHECK_INTERVAL_MS`) via each row's own `lastCheckedAt` — no separate scheduler, same "cheap
+  to check every collector tick" pattern as `metrics/runRetention.ts`. Cached results land in
+  `image_metadata` (keyed by image ref); `GET /api/v1/images` always shows locally-observed
+  image/digest facts (no network call), and only computes `updateAvailable` per-container
+  (comparing the container's own observed digest to the cached `latestDigest`) when the opt-in
+  flag is on.
+- `api/src/dependencies/`: conservative dependency view, per this file's explicit "do not imply
+  causal runtime dependencies from shared networks alone" guidance — extended to *not even use*
+  shared-network data, since the read adapter never collects Docker network membership at all
+  (see `docker/types.ts`). `view.ts`'s `buildDependencyView` (pure, fixture-tested) surfaces
+  exactly two sources: Compose-project co-membership computed directly from
+  `containers.composeProject` (label: `source: "compose_project"`, `confidence: "weak"`, an
+  explicit non-causal note, only shown for projects with 2+ containers) and explicit
+  `dependency_annotations` rows a user creates via `POST /api/v1/dependencies/annotations`
+  (label: `source: "user_annotation"`, `confidence: "declared"` — the only source treated as an
+  intentional edge). No inference beyond that.
+- Schema: added `alerts`, `backup_targets`, `backup_runs`, `image_metadata`,
+  `dependency_annotations` — see `api/drizzle/0003_worried_night_nurse.sql`. `alerts` is
+  deliberately denormalized rather than FK'd to `health_conditions` (see above);
+  `image_metadata.updateAvailable` is stored but not authoritative (recomputed per-container at
+  read time) — kept only as a coarse "did the last check resolve a digest at all" signal.
+- API additions (all still schema-validated, all secrets masked/never-returned per this file's
+  security checklist): `GET/PUT /api/v1/settings/webhook`, `GET /api/v1/alerts` (recent delivery
+  history), `GET/POST/DELETE /api/v1/backup-targets`, `POST /api/v1/webhooks/backup/:token`
+  (the one genuinely new *unauthenticated-by-session* write surface — auth is the scoped token
+  itself), `GET /api/v1/images`, `GET/PUT /api/v1/settings/registry`, `GET /api/v1/dependencies`,
+  `POST/DELETE /api/v1/dependencies/annotations`.
+- `web/`: a new "Operations" section (`App.tsx`) with 4 compact panels — webhook settings +
+  recent-deliveries list, backup targets (create form that shows the token exactly once, list
+  with freshness status), images/update center (registry-check opt-in toggle + per-container
+  update status), and dependencies (Compose-project groups + an annotation create/delete form).
+  Deliberately plain forms/lists, no new dependency, consistent with the rest of `web/`'s
+  no-charting-library style.
+- Tests: `tests/alertCooldown.test.ts`, `tests/alertFormat.test.ts` (pure), `tests/
+  backupFreshness.test.ts` (pure), `tests/imageParseRef.test.ts` (pure),
+  `tests/dependencyView.test.ts` (pure), `tests/milestone4Routes.test.ts` (all new/changed
+  routes), `tests/milestone4Cycle.test.ts` (integration through the real collector loop —
+  webhook dispatch incl. cooldown/failure handling, backup freshness conditions). 117 tests
+  total, all passing (up from 68 at the end of Milestone 3).
+- Verified end-to-end via `docker compose up -d --build` **on the real MACMINI Docker host**
+  (all 3 containers healthy): created a real backup target, POSTed a result to its webhook
+  endpoint and confirmed it's reflected in `GET /api/v1/backup-targets`; confirmed `GET
+  /api/v1/images` shows locally-observed digests with registry checks off by default; confirmed
+  `GET /api/v1/dependencies` groups the real homelab's Compose-project containers with the
+  "weak" label. Then torn down (`docker compose down -v`) — not left running as a standing
+  service, same as Milestones 1-3.
+
+### Known gotchas (Milestone 4, in addition to Milestone 3's below)
+
+- **A test asserting exact webhook-delivery call counts can flake on real host CPU/memory
+  sampling.** `host/metrics.ts` samples real `os.cpus()` over a 200ms window; in a loaded CI
+  sandbox this can occasionally cross the default `cpuWarningPercent`/`memoryWarningPercent`
+  thresholds and open/close its own `host_cpu_high`/`host_memory_high` conditions independently
+  of whatever a test is trying to exercise. `tests/milestone4Cycle.test.ts` learned this the hard
+  way — assert on the specific condition `code`/`entityType` you care about, not a total
+  `fetchMock` call count.
+- **`drizzle-orm` 0.33's better-sqlite3 driver supports `.returning().all()`/`.get()` on
+  inserts** (SQLite's own `RETURNING` clause) — used in `backups/targetsRepo.ts` and
+  `dependencies/annotationsRepo.ts` to get the generated id back without a separate `SELECT`.
+  Confirmed working here in case a future milestone assumes otherwise.
+
 **Milestone 3 (Health and history) — complete, 2026-08-26.**
 
 - `api/src/health/`: pure deterministic health engine (`engine.ts`'s `evaluateHealth`, fixture/

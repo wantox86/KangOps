@@ -4,6 +4,8 @@ import { containers, events, hosts } from "../db/schema.js";
 import type { DbClient } from "../db/client.js";
 import type { DockerReadAdapter } from "../docker/types.js";
 import { runHealthCycle } from "../health/cycle.js";
+import { runImageChecks } from "../images/check.js";
+import { getRegistryConfig } from "../images/registryConfigRepo.js";
 import { runRetention } from "../metrics/runRetention.js";
 import { diffContainer, diffMissing } from "./diff.js";
 
@@ -117,10 +119,21 @@ export function startCollector(options: CollectorOptions): Collector {
       // "collector_unavailable" shows up as a real condition/attention-queue entry, not just a
       // host status flag.
       try {
-        await runHealthCycle({ db, adapter, hostId, hostStatus: "reachable", nowIso: ts, diskPath });
+        await runHealthCycle({ db, adapter, hostId, hostStatus: "reachable", nowIso: ts, diskPath, logger });
         runRetention(db, ts);
       } catch (healthErr) {
         logger.error({ err: healthErr }, "health/metrics cycle failed");
+      }
+
+      // Registry checks are opt-in (registryConfigRepo defaults to disabled) and never allowed
+      // to affect the collector's success path -- see images/check.ts for why this is throttled
+      // internally rather than needing its own scheduler.
+      try {
+        if (getRegistryConfig(db).enabled) {
+          await runImageChecks(db, observed.map((c) => c.image), ts, logger);
+        }
+      } catch (imageErr) {
+        logger.error({ err: imageErr }, "image registry check failed");
       }
     } catch (err) {
       logger.error({ err }, "collector cycle failed after retries");
@@ -139,7 +152,7 @@ export function startCollector(options: CollectorOptions): Collector {
         .run();
 
       try {
-        await runHealthCycle({ db, adapter, hostId, hostStatus: "unreachable", nowIso: ts, diskPath });
+        await runHealthCycle({ db, adapter, hostId, hostStatus: "unreachable", nowIso: ts, diskPath, logger });
         runRetention(db, ts);
       } catch (healthErr) {
         logger.error({ err: healthErr }, "health/metrics cycle failed after collector error");

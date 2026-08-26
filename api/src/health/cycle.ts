@@ -1,12 +1,16 @@
 import { and, eq, gte } from "drizzle-orm";
+import type { FastifyBaseLogger } from "fastify";
+import { dispatchAlerts } from "../alerts/notifier.js";
+import { gatherBackupStatuses } from "../backups/gather.js";
+import { evaluateBackupHealth } from "../backups/freshness.js";
 import type { DbClient } from "../db/client.js";
 import { containers as containersTable, events, healthConditions, hosts, metricSamples } from "../db/schema.js";
 import type { DockerReadAdapter } from "../docker/types.js";
 import { collectHostMetrics } from "../host/metrics.js";
-import { evaluateHealth } from "./engine.js";
+import { evaluateHealth, summarizeConditions } from "./engine.js";
 import { reconcileConditions } from "./reconcile.js";
 import { getThresholds } from "./thresholdsRepo.js";
-import type { ContainerHealthInput, HealthResult, HostHealthInput } from "./types.js";
+import type { ContainerHealthInput, HealthConditionInput, HealthResult, HostHealthInput } from "./types.js";
 
 export interface HealthCycleOptions {
   db: DbClient;
@@ -15,6 +19,7 @@ export interface HealthCycleOptions {
   hostStatus: string;
   nowIso: string;
   diskPath?: string | undefined;
+  logger?: FastifyBaseLogger | undefined;
 }
 
 function percent(used: number | null, total: number | null): number | null {
@@ -42,7 +47,7 @@ function restartsInWindow(db: DbClient, hostId: string, windowStartIso: string):
 // pure health engine against current state, and reconciles health_conditions. Kept separate
 // from collector/loop.ts's diff/upsert logic so each piece stays independently testable.
 export async function runHealthCycle(options: HealthCycleOptions): Promise<HealthResult> {
-  const { db, adapter, hostId, hostStatus, nowIso, diskPath } = options;
+  const { db, adapter, hostId, hostStatus, nowIso, diskPath, logger } = options;
   const thresholds = getThresholds(db);
 
   const hostMetrics = await collectHostMetrics(200, diskPath);
@@ -110,10 +115,26 @@ export async function runHealthCycle(options: HealthCycleOptions): Promise<Healt
     diskPercent: percent(hostMetrics.diskUsedBytes, hostMetrics.diskTotalBytes),
   };
 
-  const result = evaluateHealth({ hosts: [hostInput], containers: containerInputs }, thresholds);
+  const hostResult = evaluateHealth({ hosts: [hostInput], containers: containerInputs }, thresholds);
+
+  // Backup freshness conditions are computed by a separate pure evaluator (backups/freshness.ts)
+  // and merged in here rather than folded into evaluateHealth itself -- health/engine.ts stays
+  // Milestone 3's host/container-only domain, and this module is the one place that already
+  // knows how to gather+reconcile+score conditions from multiple sources. Failure to gather
+  // backup status (e.g. an unreadable checkPath) is caught inside gatherBackupStatuses itself,
+  // never here -- must not break the host/container health cycle above.
+  let backupConditions: HealthConditionInput[] = [];
+  try {
+    const backupStatuses = await gatherBackupStatuses(db, logger);
+    backupConditions = evaluateBackupHealth(backupStatuses, nowIso);
+  } catch (err) {
+    logger?.error({ err }, "backup freshness gathering failed");
+  }
+
+  const allConditions = [...hostResult.conditions, ...backupConditions];
 
   const existingActive = db.select().from(healthConditions).where(eq(healthConditions.active, true)).all();
-  const { toInsert, toResolveIds } = reconcileConditions(result.conditions, existingActive, nowIso);
+  const { toInsert, toResolveIds } = reconcileConditions(allConditions, existingActive, nowIso);
 
   if (toInsert.length > 0) {
     db.insert(healthConditions).values(toInsert).run();
@@ -127,5 +148,17 @@ export async function runHealthCycle(options: HealthCycleOptions): Promise<Healt
   // called standalone (e.g. from a test) without the surrounding collector cycle.
   db.update(hosts).set({ lastSeenAt: nowIso }).where(eq(hosts.id, hostId)).run();
 
-  return result;
+  // Webhook alerts fire only for conditions newly opened *this cycle* (toInsert) -- an already-
+  // active condition never re-alerts just because it's still active, and notifier.ts's own
+  // cooldown additionally guards a flapping condition from re-alerting on every resolve/reopen.
+  // Never allowed to throw out of runHealthCycle -- a webhook failure must not fail the
+  // collector cycle that triggered it (see collector/loop.ts's own try/catch around this call).
+  try {
+    await dispatchAlerts(db, toInsert, hostId, nowIso, logger);
+  } catch (err) {
+    logger?.error({ err }, "alert dispatch failed");
+  }
+
+  const { score, status } = summarizeConditions(allConditions, thresholds);
+  return { score, status, conditions: allConditions };
 }

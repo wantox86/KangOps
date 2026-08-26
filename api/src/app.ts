@@ -9,6 +9,10 @@ import { registerEventRoutes } from "./routes/events.js";
 import { registerMetricsRoutes } from "./routes/metrics.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerHostRoutes } from "./routes/hosts.js";
+import { registerAlertRoutes } from "./routes/alerts.js";
+import { registerBackupRoutes } from "./routes/backups.js";
+import { registerImageRoutes } from "./routes/images.js";
+import { registerDependencyRoutes } from "./routes/dependencies.js";
 
 export interface BuildAppOptions {
   sqlite: Database.Database;
@@ -32,6 +36,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   registerMetricsRoutes(app, options.db);
   registerSettingsRoutes(app, options.db);
   registerHostRoutes(app, options.db);
+  registerAlertRoutes(app, options.db);
+  registerBackupRoutes(app, options.db);
+  registerImageRoutes(app, options.db);
+  registerDependencyRoutes(app, options.db);
 
   return app;
 }

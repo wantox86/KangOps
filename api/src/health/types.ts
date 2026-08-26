@@ -29,8 +29,11 @@ export const DEFAULT_THRESHOLDS: HealthThresholds = {
   attentionMinScore: 50,
 };
 
+// "backup_target" was added in Milestone 4 (backups/freshness.ts) -- health/engine.ts itself
+// never produces that entityType, but health/cycle.ts merges backup conditions into the same
+// HealthConditionInput[] pipeline (reconcile/persist/score), so the type has to allow it here.
 export interface HealthConditionInput {
-  entityType: "host" | "container";
+  entityType: "host" | "container" | "backup_target";
   entityId: string;
   code: string;
   severity: Severity;
