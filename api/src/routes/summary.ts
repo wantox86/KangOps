@@ -1,11 +1,13 @@
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { DbClient } from "../db/client.js";
-import { containers, hosts } from "../db/schema.js";
+import { containers, healthConditions, hosts } from "../db/schema.js";
+import { summarizeConditions } from "../health/engine.js";
+import { getThresholds } from "../health/thresholdsRepo.js";
 
-// Response shape mirrors what the dashboard's health-score engine (Milestone 3) will eventually
-// populate for real -- healthStatus/healthScore/reasons stay simplistic placeholders until that
-// engine exists, but hostCount/containerCounts are now real, derived from collected data
-// (Milestone 2), not hardcoded zeros.
+// healthStatus/healthScore/reasons are now real (Milestone 3's health engine, via persisted
+// health_conditions rows -- see health/cycle.ts and health/engine.ts's summarizeConditions),
+// not the "unknown"/0 placeholders from Milestone 2.
 const summaryResponseSchema = {
   type: "object",
   required: ["healthStatus", "healthScore", "reasons", "hostCount", "containerCounts"],
@@ -47,16 +49,31 @@ export function registerSummaryRoutes(app: FastifyInstance, db: DbClient): void 
       }
 
       const hasCollectedData = hostRows.length > 0;
-      const reasons = hasCollectedData
-        ? [`Tracking ${containerRows.length} container(s) across ${hostRows.length} host(s).`]
-        : ["No collector configured yet."];
 
-      // healthStatus/healthScore stay "unknown"/0 regardless of collected data -- a real
-      // deterministic score engine with penalties/thresholds/evidence is explicitly Milestone 3;
-      // computing a fake score here would be worse than an honest "unknown".
+      if (!hasCollectedData) {
+        return {
+          healthStatus: "unknown" as const,
+          healthScore: 0,
+          reasons: ["No collector configured yet."],
+          hostCount: 0,
+          containerCounts: counts,
+        };
+      }
+
+      const thresholds = getThresholds(db);
+      const active = db.select().from(healthConditions).where(eq(healthConditions.active, true)).all();
+      const { score, status } = summarizeConditions(active, thresholds);
+
+      const topReasons = [...active]
+        .sort((a, b) => b.penalty - a.penalty)
+        .slice(0, 3)
+        .map((c) => c.summary);
+      const reasons =
+        topReasons.length > 0 ? topReasons : [`Tracking ${containerRows.length} container(s) across ${hostRows.length} host(s). No active issues.`];
+
       return {
-        healthStatus: "unknown" as const,
-        healthScore: 0,
+        healthStatus: status,
+        healthScore: score,
         reasons,
         hostCount: hostRows.length,
         containerCounts: counts,

@@ -3,6 +3,8 @@ import type { FastifyBaseLogger } from "fastify";
 import { containers, events, hosts } from "../db/schema.js";
 import type { DbClient } from "../db/client.js";
 import type { DockerReadAdapter } from "../docker/types.js";
+import { runHealthCycle } from "../health/cycle.js";
+import { runRetention } from "../metrics/runRetention.js";
 import { diffContainer, diffMissing } from "./diff.js";
 
 export interface CollectorOptions {
@@ -14,6 +16,8 @@ export interface CollectorOptions {
   timeoutMs: number;
   retries: number;
   logger: FastifyBaseLogger;
+  // Overridable for tests/CI sandboxes where statfs() on "/" may behave unexpectedly.
+  diskPath?: string;
 }
 
 export interface Collector {
@@ -62,7 +66,7 @@ function nowIso(): string {
 // "collector_error" event -- per CLAUDE.md: "Record collector failures as visible system events
 // rather than silently retrying forever."
 export function startCollector(options: CollectorOptions): Collector {
-  const { db, adapter, hostId, hostName, intervalMs, timeoutMs, retries, logger } = options;
+  const { db, adapter, hostId, hostName, intervalMs, timeoutMs, retries, logger, diskPath } = options;
 
   function ensureHostRow(): void {
     const existing = db.select().from(hosts).where(eq(hosts.id, hostId)).all()[0];
@@ -105,6 +109,19 @@ export function startCollector(options: CollectorOptions): Collector {
       }
 
       db.update(hosts).set({ status: "reachable", lastSeenAt: ts }).where(eq(hosts.id, hostId)).run();
+
+      // Health/metrics run after a successful container sync, on the same cadence as the
+      // collector. Failures here are logged but must never take down the container-sync path
+      // above (that's the collector's primary job) -- see the catch branch below for the
+      // unreachable-host case, which still runs a (best-effort) health cycle so
+      // "collector_unavailable" shows up as a real condition/attention-queue entry, not just a
+      // host status flag.
+      try {
+        await runHealthCycle({ db, adapter, hostId, hostStatus: "reachable", nowIso: ts, diskPath });
+        runRetention(db, ts);
+      } catch (healthErr) {
+        logger.error({ err: healthErr }, "health/metrics cycle failed");
+      }
     } catch (err) {
       logger.error({ err }, "collector cycle failed after retries");
       db.update(hosts).set({ status: "unreachable", lastSeenAt: ts }).where(eq(hosts.id, hostId)).run();
@@ -120,6 +137,13 @@ export function startCollector(options: CollectorOptions): Collector {
           metadataJson: null,
         })
         .run();
+
+      try {
+        await runHealthCycle({ db, adapter, hostId, hostStatus: "unreachable", nowIso: ts, diskPath });
+        runRetention(db, ts);
+      } catch (healthErr) {
+        logger.error({ err: healthErr }, "health/metrics cycle failed after collector error");
+      }
     }
   }
 

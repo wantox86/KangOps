@@ -4,6 +4,11 @@ import type { DbClient } from "./db/client.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerSummaryRoutes } from "./routes/summary.js";
 import { registerContainerRoutes } from "./routes/containers.js";
+import { registerHealthScoreRoutes } from "./routes/healthScore.js";
+import { registerEventRoutes } from "./routes/events.js";
+import { registerMetricsRoutes } from "./routes/metrics.js";
+import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerHostRoutes } from "./routes/hosts.js";
 
 export interface BuildAppOptions {
   sqlite: Database.Database;
@@ -22,6 +27,11 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   registerHealthRoutes(app, options.sqlite);
   registerSummaryRoutes(app, options.db);
   registerContainerRoutes(app, options.db);
+  registerHealthScoreRoutes(app, options.db);
+  registerEventRoutes(app, options.db);
+  registerMetricsRoutes(app, options.db);
+  registerSettingsRoutes(app, options.db);
+  registerHostRoutes(app, options.db);
 
   return app;
 }

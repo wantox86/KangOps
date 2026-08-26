@@ -1,5 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import type { DbClient } from "../db/client.js";
 import { containers, events } from "../db/schema.js";
 
@@ -120,6 +121,31 @@ export function registerContainerRoutes(app: FastifyInstance, db: DbClient): voi
           summary: e.summary,
         })),
       };
+    },
+  );
+
+  const patchBodySchema = z.object({ critical: z.boolean() });
+
+  // The only write surface this app has anywhere -- and it only ever flips a local
+  // configuration flag (per CLAUDE.md's "user configuration for critical services"), never
+  // touches Docker. Kept on the same route file as the read endpoints above since it's the
+  // same resource, not a new trust boundary.
+  app.patch<{ Params: { id: string } }>(
+    "/api/v1/containers/:id",
+    { schema: { response: { 200: containerSchema } } },
+    async (request, reply) => {
+      const parsed = patchBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_body", message: parsed.error.issues.map((i) => i.message).join("; ") });
+      }
+
+      const existing = db.select().from(containers).where(eq(containers.dockerId, request.params.id)).all()[0];
+      if (!existing) {
+        return reply.code(404).send({ error: "not_found", message: "No container with that id" });
+      }
+
+      db.update(containers).set({ critical: parsed.data.critical }).where(eq(containers.dockerId, request.params.id)).run();
+      return toApiShape({ ...existing, critical: parsed.data.critical });
     },
   );
 }

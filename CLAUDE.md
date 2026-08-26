@@ -7,6 +7,83 @@
 
 ## Current State
 
+**Milestone 3 (Health and history) — complete, 2026-08-26.**
+
+- `api/src/health/`: pure deterministic health engine (`engine.ts`'s `evaluateHealth`, fixture/
+  unit-tested in `tests/healthEngine.test.ts`) implementing the penalty table from this file's
+  "Health score" section (critical container down: 35, non-critical unhealthy/restarting: 20,
+  restart loop: 20, disk warning/critical: 10/30, host/container CPU or memory high: 10,
+  collector unavailable: 20), clamped 0-100, banded into healthy/attention/critical via
+  configurable `healthyMinScore`/`attentionMinScore`. `reconcile.ts` is a second pure function
+  (mirrors `collector/diff.ts`'s pattern) that turns a fresh batch of conditions + currently-
+  active `health_conditions` rows into insert/resolve decisions — new conditions get inserted,
+  ongoing ones are left alone (no `detectedAt` reset), gone ones get `active=false` +
+  `resolvedAt`. `cycle.ts` (`runHealthCycle`, impure) is the only piece that touches the DB/
+  Docker adapter: it gathers a host metrics snapshot, per-container stats, restart counts in a
+  rolling window (from `events`), calls the engine, persists `metric_samples`, and reconciles
+  `health_conditions`. `thresholdsRepo.ts` reads/writes the threshold config as JSON in the
+  existing `settings` table (key `health_thresholds`), zod-validated, falling back to
+  `DEFAULT_THRESHOLDS` if missing/corrupt.
+- `api/src/collector/loop.ts`: `runHealthCycle` + `metrics/runRetention.ts` now run after every
+  collector tick (both the successful-sync branch and the unreachable-host catch branch, so
+  `collector_unavailable` shows up as a real condition, not just a host status flag). A
+  health/metrics failure is logged but never fails the container-sync path itself.
+- `api/src/metrics/`: `retention.ts`'s `downsampleToHourly` is a pure function that folds raw
+  `metric_samples` older than a cutoff into one `metric_samples_hourly` row per (host,
+  container-or-null, hour) — avg/max for CPU, avg/max for memory, last-known limit/total bytes.
+  `runRetention.ts` is the impure wrapper: runs every collector tick (cheap at homelab scale, no
+  separate scheduler), default 24h raw retention / 30 days hourly retention
+  (`DEFAULT_RETENTION_CONFIG`). This is what keeps `metric_samples` from growing unbounded.
+- Schema: added `metric_samples`, `metric_samples_hourly`, `health_conditions` — see
+  `api/drizzle/0002_oval_alex_power.sql`. Deliberately narrower than this file's suggested
+  `metric_samples` columns: no net/block IO columns, since neither `DockerReadAdapter`
+  implementation collects them yet (no dead always-null columns). `alerts`/`backup_*` still
+  deferred to Milestone 4.
+- API (`/api/v1`, all still read-only except one narrow config write — see below):
+  `GET /health` (aggregate score/status/active conditions), `GET /attention` (active conditions
+  sorted severity-then-recency, with evidence + `entityType`/`entityId` for UI deep-links),
+  `GET /events` (global timeline, cursor-paginated via `before`, distinct from the per-container
+  events already embedded in `GET /containers/:id`), `GET /containers/:id/metrics` and
+  `GET /hosts/:id/metrics` (chart queries — raw resolution for ranges ≤24h, hourly rollups
+  beyond that, since raw rows that old have already been folded/deleted by retention),
+  `GET /hosts` (list), `GET`/`PUT /settings` (threshold config, zod-validated).
+  `PATCH /containers/:id` (`{ critical: boolean }`) is the **only** write endpoint anywhere in
+  this app, and it only ever flips a local config flag — never touches Docker. `GET /summary`
+  now reports real `healthStatus`/`healthScore`/`reasons` from persisted `health_conditions`
+  (previously hardcoded "unknown"/0 — see Milestone 2 notes below).
+- `web/`: dashboard adds an attention-queue section (severity-badged, links to the relevant
+  container), a critical-flag toggle button in the container detail panel, and a small metrics
+  panel (current CPU%/memory% + a minimal inline-SVG sparkline, deliberately not a charting
+  library — per this file's "avoid decorative charts; prefer a number, threshold, and trend").
+- Tests: `tests/healthEngine.test.ts` (pure engine, fixture-based, one test per penalty/band/
+  edge case), `tests/healthReconcile.test.ts` (pure reconcile), `tests/metricsRetention.test.ts`
+  (pure downsampling), `tests/healthCycle.test.ts` (integration — exercises the real wiring
+  through `startCollector`, including a critical-container-down condition opening then
+  resolving across cycles), `tests/milestone3Routes.test.ts` (all new/changed routes). 68 tests
+  total, all passing.
+- Verified end-to-end via `docker compose up -d --build` **on the real MACMINI Docker host**
+  (all 3 containers healthy): `/api/v1/summary` and `/api/v1/health` correctly scored the real
+  homelab at "attention"/60 due to two genuinely-exited/unhealthy `pokjaw_postgres`/
+  `pokjaw_redis` containers (dead project noted elsewhere in this file's homelab context) with
+  matching entries in `/api/v1/attention`; `/api/v1/containers/:id/metrics` and
+  `/api/v1/hosts/local/metrics` returned real CPU/memory/disk samples;
+  `PATCH /api/v1/containers/:id` round-tripped a critical-flag change through
+  `GET /api/v1/containers/:id`. Then torn down (`docker compose down -v`) — not left running as
+  a standing service, same as Milestones 1 and 2.
+
+### Known gotchas (Milestone 3, in addition to Milestone 2's below)
+
+- **`noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` bite on plain object/Record
+  lookups used as fallbacks.** `RANGE_MS[key] ?? RANGE_MS[DEFAULT_KEY]` still types as
+  `number | undefined` even though `DEFAULT_KEY` is a literal known-present key — TS doesn't
+  narrow through the second lookup. Fixed in `routes/metrics.ts` by hoisting the default to its
+  own `const DEFAULT_RANGE_MS = RANGE_MS[DEFAULT_RANGE] as number` once, not by scattering `!`
+  assertions at each call site.
+- **A `CollectorOptions`/`HealthCycleOptions`-style options object with an optional field passed
+  a possibly-`undefined` value from a caller's own optional field trips `exactOptionalPropertyTypes`.**
+  `diskPath?: string` rejected `diskPath: someOptionalString` from the caller; needed
+  `diskPath?: string | undefined` on the interface instead of bare `diskPath?: string`.
+
 **Milestone 2 (Read-only collection and visibility) — complete, 2026-08-26.**
 
 - `api/src/docker/`: `DockerReadAdapter` interface (`listContainers`, `getStats` — read-only,
