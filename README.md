@@ -13,6 +13,16 @@ State" for full details.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the full product spec, architecture, and roadmap.
 
+## Documentation
+
+- [`docs/install.md`](./docs/install.md) — install and upgrade
+- [`docs/reverse-proxy-and-auth.md`](./docs/reverse-proxy-and-auth.md) — KangDocker has no
+  built-in auth; how to expose it safely
+- [`docs/backup.md`](./docs/backup.md) — backing up/restoring KangDocker's own database
+- [`docs/retention.md`](./docs/retention.md) — what history is kept, for how long, and why
+- [`docs/troubleshooting.md`](./docs/troubleshooting.md) — common failure modes and what's
+  expected vs. a real bug
+
 ## Stack
 
 | Layer | Choice |

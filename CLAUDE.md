@@ -7,6 +7,47 @@
 
 ## Current State
 
+**Milestone 5 (Harden and release) — complete, 2026-08-26. This is the project's first tagged
+release, `v1.0.0`.**
+
+- Security review: re-audited every Compose service's `cap_drop`/`cap_add`, `read_only`,
+  non-root entrypoint, and `docker-socket-proxy` allowlist against this file's Docker socket
+  security section and the "Security checklist" — all already consistent/minimal from prior
+  milestones (Milestone 1's chown-then-drop-privileges pattern on `api`/`web`, Milestone 2's
+  socket-proxy allowlist, Milestone 4's secret-masking on webhook/backup-token endpoints). No
+  privilege gaps found; no Compose changes were needed. Also re-read `alerts/dispatch.ts`,
+  `alerts/notifier.ts`, `backups/rateLimiter.ts`, and `routes/settings.ts` specifically for
+  secret handling and confirmed no secret ever reaches a log line or API response.
+- Added a Milestone-5-specific test: `api/tests/db.test.ts`'s "upgrade / re-run migrations
+  against an existing populated database" suite — boots against a real file-based DB (not
+  `:memory:`), writes a row, re-runs `runMigrations` twice more (simulating a container
+  restart/image upgrade against the same volume, and a crash-loop re-triggering the entrypoint),
+  and asserts data survives and no re-run throws. Existing coverage already exercised the other
+  Milestone 5 failure modes thoroughly (`collector.test.ts`'s failing/timeout adapter cases,
+  `milestone4Cycle.test.ts`'s webhook-failure-never-throws case) — those didn't need new tests,
+  just re-confirmation. 118 tests total (up from 117).
+- New `docs/`: `install.md`, `reverse-proxy-and-auth.md` (KangDocker has no built-in auth —
+  documents reverse-proxy/Cloudflare-Access/LAN-only options and what's exposed if you skip
+  this), `backup.md` (SQLite `.backup`-based backup/restore of KangDocker's own database —
+  distinct from the Milestone 4 backup-*monitoring* feature), `retention.md` (documents the
+  existing two-tier metric retention plus the deliberate non-pruning of events/health_conditions/
+  alerts at homelab scale), `troubleshooting.md`. Linked from `README.md`.
+- Verified end-to-end **on the real MACMINI Docker host** (`docker compose up -d --build`, all
+  3 containers healthy, real ~23-container homelab visible via `/api/v1/summary`/`/containers`):
+  stopped `docker-socket-proxy` to simulate Docker unavailability — confirmed `GET
+  /api/v1/hosts` correctly reported the host `unreachable`, `collector_error` events were
+  recorded, `/readyz` kept reporting `ok` (readiness only checks the DB, by design), and the API
+  process never crashed or needed a restart; restarted the proxy and confirmed the host
+  self-healed back to `reachable` on the next collector tick with no manual intervention.
+  Separately restarted `api` against the already-populated volume (simulating an upgrade) and
+  confirmed a clean restart with no migration errors and all prior data/conditions intact. Then
+  `docker compose down -v` — not left running as a standing service, same as every prior
+  milestone.
+- No significant follow-up issues found during this milestone's homelab testing beyond the two
+  pre-existing, already-documented ones below (events/health_conditions/alerts unbounded growth
+  at scale — deliberately deferred, see `docs/retention.md`).
+- Tagged `v1.0.0` and published a GitHub Release summarizing all 5 milestones.
+
 **Milestone 4 (Notification and operational context) — complete, 2026-08-26.**
 
 - `api/src/alerts/`: webhook alert destination. `types.ts`/`webhookConfigRepo.ts` store one
