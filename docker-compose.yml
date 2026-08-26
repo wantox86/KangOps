@@ -1,14 +1,52 @@
 services:
+  # Read-only Docker socket proxy (Milestone 2). This is the ONLY thing in the whole stack that
+  # touches the real docker.sock -- api talks to Docker exclusively through this proxy's
+  # allowlisted TCP endpoint. Mounting docker.sock `:ro` by itself would NOT make Docker access
+  # read-only (the `:ro` only stops writes to the socket *file*, not to the Docker API reachable
+  # through it) -- tecnativa/docker-socket-proxy is what actually enforces read-only by
+  # allowlisting exactly which API routes are proxied. See README's "Docker socket security"
+  # section before changing any of the flags below.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.2.0
+    restart: unless-stopped
+    environment:
+      # Explicit allowlist: only what the read adapter needs (list/inspect containers, stats,
+      # a basic connectivity ping). Everything else this image supports defaults to 0/disabled
+      # (POST is 0 by default in this image, listed here anyway to make the intent explicit).
+      CONTAINERS: 1
+      INFO: 1
+      PING: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # NOT read_only here (unlike every other service in this file) -- the image's own
+    # entrypoint generates /usr/local/etc/haproxy/haproxy.cfg from the env vars above at
+    # startup by sed-ing its baked-in template in place; a read-only root or a tmpfs mount over
+    # that directory both break it (tried both, confirmed by hand -- the tmpfs mount hides the
+    # template the sed step reads from, and read_only blocks the write). The container's own
+    # job -- proxying the real docker.sock -- already requires elevated trust; cap_drop/
+    # no-new-privileges below are what still meaningfully constrain it.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # No `ports:` -- only reachable by other services on the compose network, never published
+    # to the host.
+
   api:
     build: ./api
     restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_PATH: /data/kangdocker.sqlite
+      DOCKER_MODE: socket
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    depends_on:
+      - docker-socket-proxy
     volumes:
       - kangdocker_data:/data
-    # No Docker socket mount -- Milestone 1 has no collector yet, and even once it exists
-    # (Milestone 2) the spec calls for a socket proxy with an allowlist, not a raw mount here.
+    # No Docker socket mount here -- collection goes through docker-socket-proxy above, never a
+    # direct/raw socket mount into this container.
     read_only: true
     tmpfs:
       - /tmp

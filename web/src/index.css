@@ -10,7 +10,7 @@ body {
 }
 
 .shell {
-  max-width: 640px;
+  max-width: 720px;
   margin: 0 auto;
   padding: 3rem 1.5rem;
 }
@@ -29,4 +29,110 @@ body {
 
 .error {
   color: #ff6b6b;
+}
+
+.counts-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 0.75rem;
+  color: #9aa7b1;
+  font-size: 0.9rem;
+}
+
+.container-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.container-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #232b33;
+  border-radius: 8px;
+  background: #11161c;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.container-row:hover {
+  border-color: #3a4652;
+}
+
+.container-name {
+  font-weight: 600;
+}
+
+.container-project {
+  color: #9aa7b1;
+  font-size: 0.9rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  justify-self: start;
+}
+
+.badge-good {
+  background: #123524;
+  color: #4ade80;
+}
+
+.badge-bad {
+  background: #3a1414;
+  color: #ff6b6b;
+}
+
+.badge-neutral {
+  background: #232b33;
+  color: #9aa7b1;
+}
+
+.detail-panel {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid #232b33;
+  border-radius: 8px;
+  background: #11161c;
+}
+
+.close-btn {
+  background: none;
+  border: 1px solid #232b33;
+  border-radius: 6px;
+  color: inherit;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  float: right;
+}
+
+.event-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.event-time {
+  color: #9aa7b1;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 480px) {
+  .container-row {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
 }

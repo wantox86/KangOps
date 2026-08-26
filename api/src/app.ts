@@ -1,10 +1,13 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type Database from "better-sqlite3";
+import type { DbClient } from "./db/client.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerSummaryRoutes } from "./routes/summary.js";
+import { registerContainerRoutes } from "./routes/containers.js";
 
 export interface BuildAppOptions {
   sqlite: Database.Database;
+  db: DbClient;
   logLevel?: string;
 }
 
@@ -17,7 +20,8 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   });
 
   registerHealthRoutes(app, options.sqlite);
-  registerSummaryRoutes(app);
+  registerSummaryRoutes(app, options.db);
+  registerContainerRoutes(app, options.db);
 
   return app;
 }

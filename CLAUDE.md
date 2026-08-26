@@ -7,27 +7,62 @@
 
 ## Current State
 
-**Milestone 1 (Runnable foundation) — complete, 2026-08-25.**
+**Milestone 2 (Read-only collection and visibility) — complete, 2026-08-26.**
 
-- `api/`: Fastify + TypeScript (strict), `/healthz`, `/readyz`, typed `/api/v1/summary`
-  placeholder (returns honest empty/"unknown" data — no collector exists yet). SQLite via
-  Drizzle ORM + `better-sqlite3`, WAL mode, migrations in `api/drizzle/` applied at boot
-  (`src/db/migrate.ts`) and via `npm run db:migrate`. Schema so far: `hosts`, `settings` only —
-  deliberately not the full data model below yet, see "Known gotchas."
-- `web/`: React + Vite + TypeScript shell. Fetches `/api/v1/summary` and renders it; no routing,
-  no real dashboard UI yet (Milestone 3).
-- `docker-compose.yml`: two services (`api`, `web`), both `read_only: true` root filesystem,
-  `cap_drop: ALL` + a narrow `cap_add` for the one thing each needs (see "Known gotchas"),
-  `no-new-privileges`, non-root app processes, healthchecks. No Docker socket mounted anywhere
-  — Milestone 1 has no collector.
-- Tests: `api/tests/` (Vitest) covers health routes, config validation, and migrations/schema
-  via an isolated temp-file SQLite per test (`src/test-helpers/db.ts`). `web/` has no test suite
-  yet — nothing with real logic to test until later milestones.
-- CI: `.github/workflows/ci.yml` runs lint + typecheck + test + build for both `api/` and `web/`
-  on push.
-- Verified end-to-end via `docker compose up -d --build`: both containers healthy, web's nginx
-  same-origin-proxies `/api/*` to the api container, data survives an `api` restart, file
-  ownership inside the volume is `node:node` (not root).
+- `api/src/docker/`: `DockerReadAdapter` interface (`listContainers`, `getStats` — read-only,
+  no write/control method exists anywhere) with two implementations: `fixtureAdapter.ts`
+  (replays `docker/fixtures/*.json`, used for local dev without Docker and whenever
+  `DOCKER_MODE=fixture`) and `dockerodeAdapter.ts` (real adapter over `dockerode`, talks to
+  whatever `DOCKER_HOST` points at — in Compose, always the read-only socket-proxy, never a raw
+  socket).
+- `api/src/host/metrics.ts`: live CPU/memory/disk snapshot via `node:os` + `fs.statfs` — not
+  persisted as time-series yet (that's Milestone 3's `metric_samples`), just used for
+  current-state reporting.
+- `api/src/collector/loop.ts` + `diff.ts`: bounded collection loop (`COLLECTOR_INTERVAL_MS`,
+  hard per-cycle `COLLECTOR_TIMEOUT_MS`, `COLLECTOR_RETRIES` retries) that lists containers each
+  tick, diffs against the last-persisted row (pure function in `diff.ts`, independently tested),
+  upserts `containers`, and inserts `events` rows for discoveries/state changes/health
+  changes/restarts/removals. A failed cycle (after retries) marks the host `unreachable` and
+  records a visible `collector_error` event instead of retrying silently forever.
+- Schema: added `containers` (current observed state per Docker container ID) and `events`
+  (normalized lifecycle/collector events) — see `api/drizzle/0001_safe_secret_warriors.sql`.
+  `metric_samples`/`health_conditions`/`alerts`/`backup_*` still deferred to Milestone 3/4.
+- API: `/api/v1/summary` now reports real `hostCount`/`containerCounts` from persisted data
+  (`healthStatus`/`healthScore` stay "unknown"/0 — the real scoring engine is Milestone 3).
+  New `GET /api/v1/containers` and `GET /api/v1/containers/:id` (with recent events, capped at
+  50) — both return only the app's normalized shape, never raw Docker `inspect` payloads.
+- `web/`: container list + click-through detail panel (state/health badge, recent events),
+  still no router (not needed yet), responsive down to narrow phone widths.
+- `docker-compose.yml`: new `docker-socket-proxy` service (`tecnativa/docker-socket-proxy`,
+  env-allowlisted to `CONTAINERS`/`INFO`/`PING` only, `POST=0`) is the *only* thing that mounts
+  `/var/run/docker.sock` (`:ro`) — `api` reaches it over `DOCKER_HOST=tcp://docker-socket-proxy:2375`
+  and never touches the socket directly. See README's "Docker socket security" section and
+  "Known gotchas" below for why this one service is NOT `read_only: true` (everything else
+  still is).
+- Tests: `api/tests/diff.test.ts` (pure diff logic), `collector.test.ts` (loop against the
+  fixture adapter + a failing/hung adapter to exercise timeout/retry/error-event paths),
+  `containers.test.ts` (both new routes + updated summary route), plus all Milestone 1 tests
+  still passing.
+- Verified end-to-end via `docker compose up -d --build` **on the real MACMINI Docker host**:
+  all three containers healthy, collector picked up all ~20+ real homelab containers within one
+  cycle, `/api/v1/containers` and `/api/v1/containers/:id` returned real data through the web
+  proxy, then torn down (`docker compose down -v`) — not left running as a standing service.
+
+### Known gotchas (Milestone 2, in addition to Milestone 1's below)
+
+- **`tecnativa/docker-socket-proxy`'s entrypoint writes `haproxy.cfg` at container startup** by
+  `sed`-ing its own baked-in template in place — this breaks under both `read_only: true` and a
+  `tmpfs` mount over `/usr/local/etc/haproxy` (the tmpfs hides the template the sed step needs
+  to read). Confirmed both by hand. Fix: this one service intentionally does NOT set
+  `read_only: true`, unlike every other service in the compose file — `cap_drop: ALL` +
+  `no-new-privileges` + the env allowlist are what still constrain it.
+- **Drizzle 0.33's `sqliteTable` extra-config callback wants an object, not an array.**
+  `(table) => [index(...)]` fails to typecheck on this version (`IndexBuilder[]` isn't
+  `SQLiteTableExtraConfig`) even though that array form appears in some newer Drizzle docs/
+  examples — use `(table) => ({ someIdx: index(...).on(table.col) })` instead.
+- **`response.json()` on Fastify's `.inject()` result is generic (`json<T>()`), not `any`-cast.**
+  Using `response.json() as T` trips `@typescript-eslint/no-unnecessary-type-assertion`
+  (light-my-request already infers from a type param) — call `response.json<T>()` directly.
 
 ### Known gotchas (found during Milestone 1, worth knowing before touching this again)
 

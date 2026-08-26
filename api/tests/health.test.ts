@@ -9,7 +9,7 @@ describe("health routes", () => {
 
   beforeEach(() => {
     testDb = createTestDb();
-    app = buildApp({ sqlite: testDb.sqlite, logLevel: "silent" });
+    app = buildApp({ sqlite: testDb.sqlite, db: testDb.db, logLevel: "silent" });
   });
 
   afterEach(async () => {

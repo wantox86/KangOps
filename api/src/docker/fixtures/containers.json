@@ -1,0 +1,38 @@
+[
+  {
+    "dockerId": "a1b2c3d4e5f6",
+    "name": "beacon_frontend",
+    "image": "nginx:1.27-alpine",
+    "imageDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "state": "running",
+    "health": "healthy",
+    "composeProject": "webbeacon",
+    "composeService": "frontend",
+    "startedAt": "2026-08-01T00:00:00.000Z",
+    "restartCount": 0
+  },
+  {
+    "dockerId": "b2c3d4e5f6a1",
+    "name": "beacon_backend",
+    "image": "webbeacon-backend:latest",
+    "imageDigest": null,
+    "state": "running",
+    "health": "starting",
+    "composeProject": "webbeacon",
+    "composeService": "backend",
+    "startedAt": "2026-08-01T00:00:05.000Z",
+    "restartCount": 1
+  },
+  {
+    "dockerId": "c3d4e5f6a1b2",
+    "name": "translateidbot-mysql",
+    "image": "mysql:8.0",
+    "imageDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "state": "exited",
+    "health": "none",
+    "composeProject": "translateidbot",
+    "composeService": "mysql",
+    "startedAt": null,
+    "restartCount": 3
+  }
+]

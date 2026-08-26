@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import type { DbClient } from "../db/client.js";
+import { containers, hosts } from "../db/schema.js";
 
-// Response shape mirrors what the dashboard's health-score engine (Milestone 3) will
-// eventually populate for real -- fixed now so the web shell (also Milestone 1) has a stable
-// contract to build against, even though every value is a placeholder default until the
-// collector (Milestone 2) and health engine (Milestone 3) exist.
+// Response shape mirrors what the dashboard's health-score engine (Milestone 3) will eventually
+// populate for real -- healthStatus/healthScore/reasons stay simplistic placeholders until that
+// engine exists, but hostCount/containerCounts are now real, derived from collected data
+// (Milestone 2), not hardcoded zeros.
 const summaryResponseSchema = {
   type: "object",
   required: ["healthStatus", "healthScore", "reasons", "hostCount", "containerCounts"],
@@ -26,26 +28,38 @@ const summaryResponseSchema = {
   },
 } as const;
 
-export function registerSummaryRoutes(app: FastifyInstance): void {
+export function registerSummaryRoutes(app: FastifyInstance, db: DbClient): void {
   app.get(
     "/api/v1/summary",
     { schema: { response: { 200: summaryResponseSchema } } },
     async () => {
-      // Milestone 1 placeholder: no collector exists yet, so there is nothing real to report.
-      // "unknown" (not "healthy") is deliberate -- claiming a healthy homelab with zero
-      // evidence would be misleading once this endpoint is wired into the dashboard.
+      const hostRows = db.select().from(hosts).all();
+      const containerRows = db.select().from(containers).all();
+
+      const counts = { running: 0, unhealthy: 0, restarting: 0, stopped: 0, unknown: 0 };
+      for (const row of containerRows) {
+        if (row.currentState === "removed") continue;
+        if (row.currentHealth === "unhealthy") counts.unhealthy++;
+        else if (row.currentState === "running") counts.running++;
+        else if (row.currentState === "restarting") counts.restarting++;
+        else if (row.currentState === "exited" || row.currentState === "dead") counts.stopped++;
+        else counts.unknown++;
+      }
+
+      const hasCollectedData = hostRows.length > 0;
+      const reasons = hasCollectedData
+        ? [`Tracking ${containerRows.length} container(s) across ${hostRows.length} host(s).`]
+        : ["No collector configured yet."];
+
+      // healthStatus/healthScore stay "unknown"/0 regardless of collected data -- a real
+      // deterministic score engine with penalties/thresholds/evidence is explicitly Milestone 3;
+      // computing a fake score here would be worse than an honest "unknown".
       return {
         healthStatus: "unknown" as const,
         healthScore: 0,
-        reasons: ["No collector configured yet (Milestone 2)."],
-        hostCount: 0,
-        containerCounts: {
-          running: 0,
-          unhealthy: 0,
-          restarting: 0,
-          stopped: 0,
-          unknown: 0,
-        },
+        reasons,
+        hostCount: hostRows.length,
+        containerCounts: counts,
       };
     },
   );
