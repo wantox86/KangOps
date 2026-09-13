@@ -8,6 +8,10 @@ const containerSchema = {
   type: "object",
   required: [
     "dockerId",
+    // Milestone 7: with agent-reported hosts, "which machine is this container on" stops being
+    // a constant and becomes something the UI has to show -- two hosts can each run a container
+    // called "postgres", and the list is no longer implicitly single-host.
+    "hostId",
     "name",
     "image",
     "imageDigest",
@@ -22,6 +26,7 @@ const containerSchema = {
   ],
   properties: {
     dockerId: { type: "string" },
+    hostId: { type: "string" },
     name: { type: "string" },
     image: { type: "string" },
     imageDigest: { type: ["string", "null"] },
@@ -67,6 +72,7 @@ const detailResponseSchema = {
 function toApiShape(row: typeof containers.$inferSelect) {
   return {
     dockerId: row.dockerId,
+    hostId: row.hostId,
     name: row.currentName,
     image: row.imageRef,
     imageDigest: row.imageDigest,

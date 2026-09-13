@@ -16,6 +16,7 @@ interface SummaryResponse {
 
 interface ContainerSummary {
   dockerId: string;
+  hostId: string;
   name: string;
   image: string;
   state: string;
@@ -237,6 +238,174 @@ function AttentionQueue({ onSelect }: { onSelect: (containerId: string) => void 
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+// ---- Milestone 7: multi-host -------------------------------------------------------------
+
+interface HostItem {
+  id: string;
+  name: string;
+  status: string;
+  kind: "local" | "agent";
+  lastSeenAt: string;
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  diskPercent: number | null;
+  containerCount: number;
+  agentVersion: string | null;
+}
+
+interface AgentItem {
+  id: number;
+  name: string;
+  hostId: string;
+  expectedIntervalSeconds: number;
+  enabled: boolean;
+  tokenMasked: string;
+  agentVersion: string | null;
+  lastReportAt: string | null;
+  status: "pending" | "reporting" | "stale";
+}
+
+// Capacity is shown as a number with its threshold state, never as a decorative gauge -- same
+// rule the rest of this dashboard follows ("prefer a number, threshold, and trend").
+function CapacityCell({ label, percent }: { label: string; percent: number | null }): React.JSX.Element {
+  if (percent === null) return <span className="capacity-cell">{label} —</span>;
+  const tone = percent >= 90 ? "bad" : percent >= 80 ? "neutral" : "good";
+  return (
+    <span className="capacity-cell">
+      {label} <span className={`badge badge-${tone}`}>{percent.toFixed(0)}%</span>
+    </span>
+  );
+}
+
+// Every tracked host in one place: the local collector's own host alongside every agent-reporting
+// remote host. A host row states its own liveness, because the two kinds fail differently -- a
+// local host can't go "stale", and an unreachable agent host can't be diagnosed from here.
+function HostsPanel(): React.JSX.Element | null {
+  const hosts = useJsonFetch<{ hosts: HostItem[] }>("/api/v1/hosts");
+
+  if (hosts.status !== "ready" || hosts.data.hosts.length === 0) return null;
+
+  return (
+    <section className="hosts-panel">
+      <h2>Hosts</h2>
+      <div className="host-grid">
+        {hosts.data.hosts.map((host) => (
+          <div key={host.id} className="host-card">
+            <p className="host-card-title">
+              <strong>{host.name}</strong>{" "}
+              <span className="badge badge-neutral">{host.kind === "agent" ? "agent" : "local"}</span>{" "}
+              <span className={`badge badge-${host.status === "reachable" ? "good" : host.status === "unknown" ? "neutral" : "bad"}`}>
+                {host.status}
+              </span>
+            </p>
+            <div className="counts-row">
+              <CapacityCell label="CPU" percent={host.cpuPercent} />
+              <CapacityCell label="Memory" percent={host.memoryPercent} />
+              <CapacityCell label="Disk" percent={host.diskPercent} />
+            </div>
+            <p className="tagline">
+              {host.containerCount} container(s) · last seen {host.lastSeenAt}
+              {host.agentVersion ? ` · agent v${host.agentVersion}` : ""}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AgentsPanel(): React.JSX.Element {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const agents = useJsonFetch<{ items: AgentItem[] }>("/api/v1/agents", [refreshKey]);
+  const [name, setName] = useState("");
+  const [expectedIntervalSeconds, setExpectedIntervalSeconds] = useState(30);
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  async function create(): Promise<void> {
+    setCreateError(null);
+    try {
+      const response = await fetch("/api/v1/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, expectedIntervalSeconds }),
+      });
+      if (!response.ok) {
+        const body = (await response.json()) as { message?: string };
+        throw new Error(body.message ?? `HTTP ${response.status}`);
+      }
+      const created = (await response.json()) as { token: string };
+      setNewToken(created.token);
+      setName("");
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
+  async function remove(id: number): Promise<void> {
+    await fetch(`/api/v1/agents/${id}`, { method: "DELETE" });
+    setRefreshKey((k) => k + 1);
+  }
+
+  return (
+    <section className="ops-panel">
+      <h3>Remote agents</h3>
+      <p className="tagline">
+        A registered host runs the agent from <code>agent/</code>, which pushes its own metrics here over an outbound
+        connection — the monitored host opens no inbound port. An agent that misses 3 intervals opens an
+        <code> agent_unreachable</code> condition.
+      </p>
+
+      {newToken && (
+        <p className="token-callout">
+          Agent registered. Token (shown once, copy it into the agent's <code>.env</code> now): <code>{newToken}</code>
+          <button type="button" onClick={() => setNewToken(null)}>
+            Dismiss
+          </button>
+        </p>
+      )}
+
+      <div className="form-row">
+        <input placeholder="host name (e.g. BMAX)" value={name} onChange={(e) => setName(e.target.value)} />
+        <input
+          type="number"
+          min={5}
+          max={3600}
+          value={expectedIntervalSeconds}
+          onChange={(e) => setExpectedIntervalSeconds(Number(e.target.value))}
+          title="Expected report interval (seconds)"
+        />
+        <button type="button" disabled={!name} onClick={() => void create()}>
+          Register agent
+        </button>
+      </div>
+      {createError && <p className="error">{createError}</p>}
+
+      {agents.status === "ready" && agents.data.items.length === 0 && (
+        <p className="tagline">No remote agents registered — KangOps is only watching its own host.</p>
+      )}
+      {agents.status === "ready" && agents.data.items.length > 0 && (
+        <ul className="event-list">
+          {agents.data.items.map((agent) => (
+            <li key={agent.id}>
+              <span className={`badge badge-${agent.status === "reporting" ? "good" : agent.status === "pending" ? "neutral" : "bad"}`}>
+                {agent.status}
+              </span>{" "}
+              <strong>{agent.name}</strong> ({agent.hostId}) — every {agent.expectedIntervalSeconds}s — token{" "}
+              {agent.tokenMasked}
+              {agent.lastReportAt ? ` — last report ${agent.lastReportAt}` : " — never reported"}{" "}
+              <button type="button" className="link-btn" onClick={() => void remove(agent.id)}>
+                delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -609,6 +778,7 @@ function OperationsSection({ containers }: { containers: ContainerSummary[] }): 
   return (
     <section className="operations-section">
       <h2>Operations</h2>
+      <AgentsPanel />
       <WebhookSettingsPanel />
       <BackupTargetsPanel />
       <ImagesPanel />
@@ -623,6 +793,11 @@ export function App(): React.JSX.Element {
   const containersState = useJsonFetch<{ containers: ContainerSummary[] }>("/api/v1/containers", [refreshKey]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // The host column only earns its space once more than one host is being tracked -- on a
+  // single-host install it would be a column of identical values.
+  const containerRows = containersState.status === "ready" ? containersState.data.containers : [];
+  const showHostColumn = new Set(containerRows.map((c) => c.hostId)).size > 1;
+
   function refresh(): void {
     setRefreshKey((k) => k + 1);
   }
@@ -630,7 +805,7 @@ export function App(): React.JSX.Element {
   return (
     <main className="shell">
       <h1>KangOps</h1>
-      <p className="tagline">Local-first Docker observability — Milestone 4: notification and operational context.</p>
+      <p className="tagline">Local-first Docker observability — Milestone 7: multi-host agents.</p>
 
       {summary.status === "loading" && <p>Loading summary…</p>}
       {summary.status === "error" && <p className="error">Could not reach the API: {summary.message}</p>}
@@ -654,6 +829,8 @@ export function App(): React.JSX.Element {
         </section>
       )}
 
+      <HostsPanel />
+
       <AttentionQueue onSelect={setSelectedId} />
 
       <h2>Containers</h2>
@@ -668,7 +845,7 @@ export function App(): React.JSX.Element {
             <button
               type="button"
               key={container.dockerId}
-              className="container-row"
+              className={showHostColumn ? "container-row container-row-multihost" : "container-row"}
               role="row"
               onClick={() => setSelectedId(container.dockerId)}
             >
@@ -676,6 +853,7 @@ export function App(): React.JSX.Element {
                 {container.critical && <span title="Marked critical">★ </span>}
                 {container.name}
               </span>
+              {showHostColumn && <span className="container-host">{container.hostId}</span>}
               <span className="container-project">{container.composeProject ?? "—"}</span>
               <StateBadge state={container.state} health={container.health} />
             </button>

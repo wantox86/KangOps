@@ -192,6 +192,49 @@ body {
   }
 }
 
+/* Milestone 7: multi-host (local collector + agent-reporting remote hosts) */
+
+.hosts-panel {
+  margin-top: 1.5rem;
+}
+
+.host-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+
+.host-card {
+  padding: 0.75rem 1rem;
+  border: 1px solid #232b33;
+  border-radius: 8px;
+  background: #11161c;
+}
+
+.host-card-title {
+  margin: 0;
+}
+
+.capacity-cell {
+  white-space: nowrap;
+}
+
+/* The host column only exists once more than one host is tracked -- see App.tsx. */
+.container-row-multihost {
+  grid-template-columns: 1fr auto 1fr auto;
+}
+
+.container-host {
+  color: #9aa7b1;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 480px) {
+  .container-row-multihost {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Milestone 4: webhook alerts / backups / images / dependencies */
 
 .operations-section {
