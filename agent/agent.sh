@@ -52,11 +52,16 @@ read_cpu_counters() {
 # cache, so MemFree reads as ~95% "used" and would open a permanent, meaningless
 # host_memory_high condition. MemAvailable is the kernel's own estimate of what a new workload
 # could actually get, which is the question the dashboard is asking.
+#
+# %.0f, not %d, on every byte count in this file: busybox awk converts to a 32-bit signed int for
+# %d, so an 8GB total silently comes out as -2147483648 and the server (correctly) rejects the
+# whole report as invalid. awk holds numbers as doubles, so %.0f prints the real value. This is
+# only reachable on hosts with >2GB of anything, which is all of them.
 read_memory() {
   awk '
     /^MemTotal:/ { total=$2 }
     /^MemAvailable:/ { avail=$2 }
-    END { if (total == "" || avail == "") exit 1; printf "%d %d\n", total*1024, (total-avail)*1024 }
+    END { if (total == "" || avail == "") exit 1; printf "%.0f %.0f\n", total*1024, (total-avail)*1024 }
   ' "$PROC/meminfo" 2>/dev/null || true
 }
 
@@ -65,11 +70,11 @@ read_memory() {
 # used=$(NF-3), total=$(NF-4) matches statfs blocks/bfree semantics, i.e. the same numbers the
 # server's local host metrics report.
 read_disk() {
-  df -k "$DISK_PATH" 2>/dev/null | awk 'NR>1 { u=$(NF-3); t=$(NF-4) } END { if (t == "" || t+0 <= 0) exit 1; printf "%d %d\n", u*1024, t*1024 }' || true
+  df -k "$DISK_PATH" 2>/dev/null | awk 'NR>1 { u=$(NF-3); t=$(NF-4) } END { if (t == "" || t+0 <= 0) exit 1; printf "%.0f %.0f\n", u*1024, t*1024 }' || true
 }
 
 read_uptime() {
-  awk '{ printf "%d\n", $1; exit }' "$PROC/uptime" 2>/dev/null || true
+  awk '{ printf "%.0f\n", $1; exit }' "$PROC/uptime" 2>/dev/null || true
 }
 
 # One Docker API call per cycle, list only. Deliberately NOT one inspect per container: inspect
