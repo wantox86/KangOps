@@ -1,4 +1,4 @@
-# KangDocker
+# KangOps
 
 Local-first Docker observability and control tower for a homelab. Not a Portainer clone —
 prioritizes understanding ("is my homelab healthy, and why") over full Docker administration.
@@ -16,9 +16,9 @@ See [`CLAUDE.md`](./CLAUDE.md) for the full product spec, architecture, and road
 ## Documentation
 
 - [`docs/install.md`](./docs/install.md) — install and upgrade
-- [`docs/reverse-proxy-and-auth.md`](./docs/reverse-proxy-and-auth.md) — KangDocker has no
+- [`docs/reverse-proxy-and-auth.md`](./docs/reverse-proxy-and-auth.md) — KangOps has no
   built-in auth; how to expose it safely
-- [`docs/backup.md`](./docs/backup.md) — backing up/restoring KangDocker's own database
+- [`docs/backup.md`](./docs/backup.md) — backing up/restoring KangOps's own database
 - [`docs/retention.md`](./docs/retention.md) — what history is kept, for how long, and why
 - [`docs/troubleshooting.md`](./docs/troubleshooting.md) — common failure modes and what's
   expected vs. a real bug
@@ -55,7 +55,7 @@ comment on why). Override with `WEB_PORT` in `.env`.
 
 ## Docker socket security
 
-KangDocker's collector needs to read container facts from the Docker Engine API. That is
+KangOps's collector needs to read container facts from the Docker Engine API. That is
 treated as the highest-risk integration in this project (Docker socket access is effectively
 root on the host), so:
 

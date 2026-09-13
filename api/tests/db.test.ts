@@ -50,8 +50,8 @@ describe("upgrade / re-run migrations against an existing populated database", (
   let path: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "kangdocker-upgrade-test-"));
-    path = join(dir, "kangdocker.sqlite");
+    dir = mkdtempSync(join(tmpdir(), "kangops-upgrade-test-"));
+    path = join(dir, "kangops.sqlite");
   });
 
   afterEach(() => {

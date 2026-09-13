@@ -18,7 +18,7 @@ export interface TestDb {
 // see db/client.ts) needs a real file, and using the same code path in tests catches WAL-
 // specific bugs that :memory: would hide.
 export function createTestDb(): TestDb {
-  const dir = mkdtempSync(join(tmpdir(), "kangdocker-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "kangops-test-"));
   const path = join(dir, "test.sqlite");
   const { db, sqlite } = createDb(path);
   migrate(db, { migrationsFolder: "./drizzle" });

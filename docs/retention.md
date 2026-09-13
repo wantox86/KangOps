@@ -1,6 +1,6 @@
 # Retention
 
-KangDocker keeps three kinds of history, each with different retention behavior. All of it is
+KangOps keeps three kinds of history, each with different retention behavior. All of it is
 enforced automatically — there's no separate retention cron/service to configure or forget to
 run.
 
@@ -45,7 +45,7 @@ problem at homelab scale" reasoning as events above.
 `backup_runs` only grows when a backup job actually reports a result via its webhook — not on
 every collector tick (filesystem freshness is evaluated live from mtime each cycle and never
 persisted as its own row) — so this table's growth is bounded by how often your own backup jobs
-run, not by KangDocker's polling interval.
+run, not by KangOps's polling interval.
 
 ## If disk usage becomes a concern
 

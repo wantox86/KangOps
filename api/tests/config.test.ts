@@ -7,7 +7,7 @@ describe("loadConfig", () => {
     expect(config.PORT).toBe(3001);
     expect(config.HOST).toBe("0.0.0.0");
     expect(config.NODE_ENV).toBe("development");
-    expect(config.DATABASE_PATH).toBe("./data/kangdocker.sqlite");
+    expect(config.DATABASE_PATH).toBe("./data/kangops.sqlite");
   });
 
   it("coerces PORT from a string env var", () => {

@@ -38,13 +38,13 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_PATH: /data/kangdocker.sqlite
+      DATABASE_PATH: /data/kangops.sqlite
       DOCKER_MODE: socket
       DOCKER_HOST: tcp://docker-socket-proxy:2375
     depends_on:
       - docker-socket-proxy
     volumes:
-      - kangdocker_data:/data
+      - kangops_data:/data
     # No Docker socket mount here -- collection goes through docker-socket-proxy above, never a
     # direct/raw socket mount into this container.
     read_only: true
@@ -103,4 +103,4 @@ services:
       retries: 3
 
 volumes:
-  kangdocker_data:
+  kangops_data:

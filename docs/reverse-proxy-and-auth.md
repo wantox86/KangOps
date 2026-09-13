@@ -1,11 +1,11 @@
 # Reverse proxy and authentication
 
-**KangDocker has no built-in authentication.** Every `/api/v1/*` route is reachable by anyone
+**KangOps has no built-in authentication.** Every `/api/v1/*` route is reachable by anyone
 who can reach the `web` container's published port. This is an explicit MVP exclusion (see
 `CLAUDE.md`'s "Non-goals" / "Explicit MVP exclusions" — "Authentication beyond an intentional
 deployment recommendation (reverse proxy auth or local trusted network)"), not an oversight.
 
-Treat exposing KangDocker like exposing any other unauthenticated homelab dashboard: fine on a
+Treat exposing KangOps like exposing any other unauthenticated homelab dashboard: fine on a
 trusted LAN, **not fine directly on the internet**.
 
 ## What's exposed if you skip this
@@ -23,14 +23,14 @@ trusted LAN, **not fine directly on the internet**.
 
 ## Recommended: reverse proxy with auth in front
 
-Put KangDocker's `web` container behind a reverse proxy that terminates TLS and requires auth
+Put KangOps's `web` container behind a reverse proxy that terminates TLS and requires auth
 before forwarding to it — this is the pattern this project's own homelab uses for other
 unauthenticated dashboards. Two straightforward options:
 
 ### Option A — Caddy with `basicauth`
 
 ```
-kangdocker.example.internal {
+kangops.example.internal {
     basicauth {
         <user> <bcrypt-hash>
     }
@@ -52,7 +52,7 @@ all, just with TLS.
 
 Simplest and lowest-effort: don't expose `WEB_PORT` beyond your LAN/VPN at all (no port
 forward, no tunnel entry). Nothing further to configure. This is the right default if you don't
-need to check KangDocker away from home.
+need to check KangOps away from home.
 
 ## What NOT to do
 

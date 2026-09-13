@@ -22,7 +22,7 @@ export interface AlertableCondition {
 // "ntfy" matches ntfy.sh's plain-text-body + header convention (Title/Priority/Tags). Kept as
 // pure string-building (no fetch) so it's unit-testable without a network mock.
 export function buildWebhookRequest(format: WebhookFormat, condition: AlertableCondition, hostId: string): WebhookRequest {
-  const title = `[KangDocker] ${condition.severity.toUpperCase()}: ${condition.code}`;
+  const title = `[KangOps] ${condition.severity.toUpperCase()}: ${condition.code}`;
 
   if (format === "discord") {
     return {

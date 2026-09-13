@@ -8,7 +8,7 @@ const EnvSchema = z.object({
   HOST: z.string().default("0.0.0.0"),
   // Persistent SQLite file path -- mounted as a volume in Compose. Defaults to a repo-local
   // path for `npm run dev`, overridden in docker-compose.yml to point at the named volume.
-  DATABASE_PATH: z.string().default("./data/kangdocker.sqlite"),
+  DATABASE_PATH: z.string().default("./data/kangops.sqlite"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
   // Milestone 2: which Docker read adapter to use. "fixture" replays recorded sample data (no

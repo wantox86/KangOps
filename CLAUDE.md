@@ -1,11 +1,59 @@
-# KangDocker — Claude Code Guide
+# KangOps — Claude Code Guide
 
-> This file is the original product spec (`~/Documents/CLAUDE-KangDocker.md`), copied into the
-> repo as the source of truth for architecture/roadmap, with a **Current State** section
-> prepended. Update the Current State section as milestones complete; the spec below stays
-> mostly as planning guidance until a milestone's actual implementation diverges from it.
+> This file is the original product spec (`~/Documents/CLAUDE-KangDocker.md`, the project's
+> original name — the file itself was not renamed on disk), copied into the repo as the source
+> of truth for architecture/roadmap, with a **Current State** section prepended. Update the
+> Current State section as milestones complete; the spec below stays mostly as planning
+> guidance until a milestone's actual implementation diverges from it.
+>
+> **KangOps is the renamed evolution of KangDocker** (rebranded Milestone 6, 2026-09-13) — same
+> codebase/history, broader long-term vision (a general homelab operations dashboard: host/
+> service/storage/network monitoring, auth, container control, etc., all out of scope for now).
+> Docker observability/control (this spec) is its first and currently only module. Every
+> "KangDocker" mention below was the product's name at the time each milestone was written;
+> historical entries are left factually as-is except for the name swap itself.
 
 ## Current State
+
+**Milestone 6 (KangOps rebrand) — complete, 2026-09-13.**
+
+- Pure rebranding milestone: no stack changes, no new features, no config-surface changes. The
+  product is renamed KangDocker → KangOps (see the header note above for the "why" — broader
+  long-term homelab-ops vision, Docker observability staying as the first module). GitHub repo
+  and local folder were already renamed to `KangOps` before this milestone started; this
+  milestone is the text/identity pass over the codebase itself.
+- Package identity: `api/package.json` and `web/package.json` `name` → `kangops-api`/
+  `kangops-web`; both `package-lock.json`s regenerated (`npm install --package-lock-only`) so
+  the lockfile `name` fields match instead of drifting from `package.json`.
+- Runtime/storage naming: `docker-compose.yml`'s named volume `kangdocker_data` →
+  `kangops_data`, and its `api` service's `DATABASE_PATH` env override → `/data/kangops.sqlite`.
+  Brought `.env`/`.env.example`, `api/src/config.ts`'s `DATABASE_PATH` default, and
+  `api/drizzle.config.ts`'s fallback url in line with the same new filename — these had to move
+  together since `docker-compose.yml`'s explicit `environment:` value silently overrides
+  `env_file`, and a previous pass had only updated the compose file, leaving local
+  (non-Compose) dev pointed at the old `kangdocker.sqlite` filename. `api/docker-entrypoint.sh`'s
+  comment and the temp-dir prefixes in `api/src/test-helpers/db.ts` and `api/tests/db.test.ts`
+  (`kangdocker-test-`/`kangdocker-upgrade-test-`) updated to match; `api/tests/config.test.ts`'s
+  assertion updated accordingly. Compose service names (`docker-socket-proxy`/`api`/`web`) were
+  already generic and untouched; **host port stays 8085**, unchanged.
+- User-visible/CI text: `web/index.html` `<title>`, `web/src/App.tsx`'s `<h1>`, the webhook
+  alert title prefix in `api/src/alerts/format.ts` (`[KangDocker]` → `[KangOps]`), `README.md`
+  (title + the two doc-index blurbs referencing KangDocker by name), `docs/install.md`,
+  `docs/backup.md`, `docs/retention.md`, `docs/reverse-proxy-and-auth.md`,
+  `docs/troubleshooting.md`, and `.github/workflows/ci.yml`'s health-check step (container
+  names `kangdocker-api-1`/`kangdocker-web-1` → `kangops-api-1`/`kangops-web-1`, matching the
+  Compose-project-name-from-folder-name convention now that the folder is `KangOps`).
+- Deliberately left untouched: this file's own historical Current State entries below (every
+  "KangDocker" mention in Milestone 1-5 write-ups is factually correct for when it was written,
+  per the header note) and the original spec doc's filename
+  (`~/Documents/CLAUDE-KangDocker.md`, outside the repo, not renamed). No endpoint paths,
+  allowlist entries, schema, or other technical identifiers were touched.
+- Verified end-to-end on the real MACMINI Docker host: `docker compose up -d --build`, all 3
+  containers came up named `kangops-*-1` (from the renamed project folder, no explicit
+  `container_name:` needed), `curl http://localhost:8085/api/v1/summary` returned a normal
+  summary against the real homelab, then `docker compose down -v` — not left running, same as
+  every prior milestone. Full lint/typecheck/test re-run in both `api/` and `web/` after the
+  rename to catch any stale hardcoded string.
 
 **Milestone 5 (Harden and release) — complete, 2026-08-26. This is the project's first tagged
 release, `v1.0.0`.**
@@ -26,9 +74,9 @@ release, `v1.0.0`.**
   Milestone 5 failure modes thoroughly (`collector.test.ts`'s failing/timeout adapter cases,
   `milestone4Cycle.test.ts`'s webhook-failure-never-throws case) — those didn't need new tests,
   just re-confirmation. 118 tests total (up from 117).
-- New `docs/`: `install.md`, `reverse-proxy-and-auth.md` (KangDocker has no built-in auth —
+- New `docs/`: `install.md`, `reverse-proxy-and-auth.md` (KangOps has no built-in auth —
   documents reverse-proxy/Cloudflare-Access/LAN-only options and what's exposed if you skip
-  this), `backup.md` (SQLite `.backup`-based backup/restore of KangDocker's own database —
+  this), `backup.md` (SQLite `.backup`-based backup/restore of KangOps's own database —
   distinct from the Milestone 4 backup-*monitoring* feature), `retention.md` (documents the
   existing two-tier metric retention plus the deliberate non-pruning of events/health_conditions/
   alerts at homelab scale), `troubleshooting.md`. Linked from `README.md`.
@@ -320,7 +368,7 @@ separate decision, not made as part of this milestone.
 
 ## Project vision
 
-KangDocker is a personal, local-first **Docker observability and control tower** for a homelab. It gives one person a calm, useful view of whether their services are healthy, why something changed, and what needs attention.
+KangOps is a personal, local-first **Docker observability and control tower** for a homelab. It gives one person a calm, useful view of whether their services are healthy, why something changed, and what needs attention.
 
 It is deliberately **not a Portainer clone**. The product prioritizes understanding and safe response over complete Docker administration. A user should be able to open the dashboard and answer:
 

@@ -53,7 +53,7 @@ part of Milestone 5 — see `CLAUDE.md`'s Current State entry for what was obser
    working as intended, not a bug.
 4. A destination endpoint that's temporarily down (DNS failure, connection refused, 5xx) will
    show up as a `status: "failed"` row with the underlying error message — check that message
-   before assuming KangDocker is broken.
+   before assuming KangOps is broken.
 
 ## Backup target shows stale/missing when I know the job ran
 
@@ -67,7 +67,7 @@ part of Milestone 5 — see `CLAUDE.md`'s Current State entry for what was obser
 
 ## Upgrade / restart lost my data
 
-It shouldn't — data lives in the `kangdocker_data` named volume, independent of the container
+It shouldn't — data lives in the `kangops_data` named volume, independent of the container
 images. Check you didn't run `docker compose down -v` (the `-v` deletes volumes) instead of
 plain `docker compose down`. See [`backup.md`](./backup.md) for how to check/restore from a
 backup, and [`install.md`](./install.md) for the supported upgrade path.

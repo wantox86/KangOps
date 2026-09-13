@@ -629,7 +629,7 @@ export function App(): React.JSX.Element {
 
   return (
     <main className="shell">
-      <h1>KangDocker</h1>
+      <h1>KangOps</h1>
       <p className="tagline">Local-first Docker observability — Milestone 4: notification and operational context.</p>
 
       {summary.status === "loading" && <p>Loading summary…</p>}

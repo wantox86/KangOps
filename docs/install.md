@@ -1,6 +1,6 @@
 # Install
 
-KangDocker is one Docker Compose stack: `docker-socket-proxy` (read-only Docker access),
+KangOps is one Docker Compose stack: `docker-socket-proxy` (read-only Docker access),
 `api`, and `web`. There is no separate database server or message queue to install — SQLite
 lives on a named volume next to the API.
 
@@ -15,8 +15,8 @@ lives on a named volume next to the API.
 ## Steps
 
 ```bash
-git clone https://github.com/wantox86/KangDocker.git
-cd KangDocker
+git clone https://github.com/wantox86/KangOps.git
+cd KangOps
 cp .env.example .env
 docker compose up -d --build
 ```
@@ -56,13 +56,13 @@ Migrations run automatically and synchronously before the API starts serving `/r
 (see `api/src/index.ts` / `api/src/db/migrate.ts`) — there is no separate manual migration step,
 and re-running them against an already-migrated database is a safe no-op (verified in
 `api/tests/db.test.ts`'s "upgrade / re-run migrations" suite). Your data lives in the
-`kangdocker_data` named volume and is untouched by rebuilding the images. If you want a rollback
+`kangops_data` named volume and is untouched by rebuilding the images. If you want a rollback
 path, see the note at the bottom of this file.
 
 ## Uninstall / full teardown
 
 ```bash
-docker compose down        # keeps the kangdocker_data volume
+docker compose down        # keeps the kangops_data volume
 docker compose down -v     # also deletes the volume (all data — hosts, history, settings)
 ```
 
