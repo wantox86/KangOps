@@ -1,0 +1,79 @@
+# KangOps agent -- deploy this on a host you want KangOps to monitor remotely.
+#
+# This is an INDEPENDENT Compose project (`name:` below), not a service to paste into an existing
+# stack. It is deployed alongside whatever the host already runs -- on the first target host that
+# is a production Immich stack -- and must be startable, restartable, and removable without ever
+# touching those containers. Keep it in its own directory with its own .env.
+#
+# Nothing here publishes a port. The agent dials out to the KangOps server; the monitored host
+# stays closed.
+name: kangops-agent
+
+services:
+  # Same reasoning as the KangOps server's own compose file: mounting docker.sock `:ro` does NOT
+  # make Docker access read-only (the `:ro` protects the socket *file*, not the API behind it).
+  # This proxy is what enforces read-only, by allowlisting exactly the routes the agent calls.
+  # It is the only container here that touches the socket, and it never leaves this project's
+  # internal network.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.2.0
+    container_name: kangops_agent_socket_proxy
+    restart: unless-stopped
+    environment:
+      # The agent uses exactly one route: GET /containers/json. INFO/PING are here for
+      # connectivity debugging; everything else this image supports stays off, and POST=0 means
+      # no write/control call can traverse this proxy even if something tried.
+      CONTAINERS: 1
+      INFO: 1
+      PING: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # NOT read_only -- this image's entrypoint sed-writes its own haproxy.cfg at startup from the
+    # env vars above. Documented in the server compose file too; confirmed by hand there.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 48m
+    # The target host has ~4GB of free disk. An unbounded json-file log on a container that
+    # restarts forever is a real way to fill it, which would take the host's actual workload down
+    # with it -- so both services here are capped.
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "2"
+
+  agent:
+    build: .
+    container_name: kangops_agent
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DOCKER_API: http://docker-socket-proxy:2375
+      HOST_PROC: /host/proc
+      HOST_DISK_PATH: /host/root
+    depends_on:
+      - docker-socket-proxy
+    volumes:
+      # Read-only host views. /proc is needed for real host CPU/memory (a container's own
+      # /proc/stat is the host's, but mounting it explicitly makes the dependency obvious), and
+      # the root bind mount exists purely so `df` can measure the host filesystem rather than the
+      # container's overlay.
+      - /proc:/host/proc:ro
+      - /:/host/root:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Hard ceilings, not hints: on a box this small the agent misbehaving must degrade the agent,
+    # not the workload it is monitoring. Measured idle usage is well under 10MB / ~0% CPU.
+    mem_limit: 32m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "2"
