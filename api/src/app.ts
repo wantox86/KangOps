@@ -13,6 +13,7 @@ import { registerAlertRoutes } from "./routes/alerts.js";
 import { registerBackupRoutes } from "./routes/backups.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerDependencyRoutes } from "./routes/dependencies.js";
+import { registerAgentRoutes } from "./routes/agents.js";
 
 export interface BuildAppOptions {
   sqlite: Database.Database;
@@ -40,6 +41,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   registerBackupRoutes(app, options.db);
   registerImageRoutes(app, options.db);
   registerDependencyRoutes(app, options.db);
+  registerAgentRoutes(app, options.db);
 
   return app;
 }

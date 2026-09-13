@@ -1,5 +1,6 @@
 import { and, eq, gte } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
+import { evaluateAgentHealth, gatherAgentSnapshots } from "../agents/health.js";
 import { dispatchAlerts } from "../alerts/notifier.js";
 import { gatherBackupStatuses } from "../backups/gather.js";
 import { evaluateBackupHealth } from "../backups/freshness.js";
@@ -131,7 +132,20 @@ export async function runHealthCycle(options: HealthCycleOptions): Promise<Healt
     logger?.error({ err }, "backup freshness gathering failed");
   }
 
-  const allConditions = [...hostResult.conditions, ...backupConditions];
+  // Agent-reported remote hosts (Milestone 7) are folded in the same way backup conditions are:
+  // a separate gather + pure evaluator, merged into the one reconcile/persist/score pass below.
+  // This is what makes a remote host's disk/CPU/container problems land in the same attention
+  // queue and the same health score as the local host's, with no parallel scoring path. The
+  // local collector cycle is the only clock in the process, so it's also what detects an agent
+  // having gone silent -- an agent that stops reporting can't report its own absence.
+  let agentConditions: HealthConditionInput[] = [];
+  try {
+    agentConditions = evaluateAgentHealth(gatherAgentSnapshots(db), thresholds, nowIso);
+  } catch (err) {
+    logger?.error({ err }, "agent health evaluation failed");
+  }
+
+  const allConditions = [...hostResult.conditions, ...backupConditions, ...agentConditions];
 
   const existingActive = db.select().from(healthConditions).where(eq(healthConditions.active, true)).all();
   const { toInsert, toResolveIds } = reconcileConditions(allConditions, existingActive, nowIso);

@@ -7,7 +7,8 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-or
 // deterministic health/attention engine. Milestone 4 adds alerts (webhook delivery records),
 // backup_targets/backup_runs, image_metadata, and dependency_annotations -- see this file's
 // Current State section for how each stays narrow/conservative rather than matching the spec's
-// suggested columns verbatim.
+// suggested columns verbatim. Milestone 7 adds agents (remote hosts that push their own metrics
+// to this server instead of being polled).
 
 export const hosts = sqliteTable("hosts", {
   id: text("id").primaryKey(),
@@ -274,6 +275,41 @@ export const dependencyAnnotations = sqliteTable(
     toIdx: index("dependency_annotations_to_idx").on(table.toContainerId),
   }),
 );
+
+// Milestone 7: one row per remote host that runs a KangOps agent. The agent is outbound-only --
+// it POSTs to /api/v1/agents/:token/report on a schedule, so a monitored host never needs an
+// inbound port opened (see agent/README.md). token is the scoped, high-entropy credential that
+// both authenticates and identifies the reporting agent, generated once at creation and returned
+// in that response only -- exactly the backup_targets.token pattern (routes/agents.ts masks it on
+// every read). hostId FKs the hosts row created alongside the agent, so a registered-but-never-
+// reported agent still shows up in GET /hosts as "unknown" rather than being invisible until its
+// first report lands.
+export const agents = sqliteTable(
+  "agents",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    hostId: text("host_id")
+      .notNull()
+      .references(() => hosts.id),
+    token: text("token").notNull(),
+    // What "on time" means for this agent -- staleness (agents/health.ts) is a multiple of this,
+    // not a global constant, because a battery/low-power host may legitimately report far less
+    // often than a always-on one.
+    expectedIntervalSeconds: integer("expected_interval_seconds").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    agentVersion: text("agent_version"),
+    lastReportAt: text("last_report_at"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    tokenIdx: uniqueIndex("agents_token_idx").on(table.token),
+    hostIdIdx: uniqueIndex("agents_host_id_idx").on(table.hostId),
+  }),
+);
+
+export type Agent = typeof agents.$inferSelect;
+export type NewAgent = typeof agents.$inferInsert;
 
 export type Alert = typeof alerts.$inferSelect;
 export type NewAlert = typeof alerts.$inferInsert;
