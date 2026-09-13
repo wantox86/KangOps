@@ -15,6 +15,121 @@
 
 ## Current State
 
+**Milestone 7 (Multi-host agents) — complete, 2026-09-13. First remote host: BMAX.**
+
+This is the milestone where "KangOps monitors the host it runs on" stops being true. It is a
+narrow slice of the spec's Phase 4, taken early and deliberately: per-host push agents and
+node-aware aggregation, but **no** scoped per-node credential rotation, no node-local storage,
+and no auth (still deliberately deferred — see below).
+
+- **Direction of collection is the whole design decision.** The local collector polls a socket
+  proxy on its own host; that does not extend to other machines without either exposing each
+  host's Docker API on the LAN or opening an inbound port per host. So the agent inverts it: it
+  collects locally and makes an **outbound** POST to this server. A monitored host therefore
+  opens no inbound port, exposes no socket off-host, needs no firewall/router change, and works
+  behind NAT or on another subnet. The per-host token is both its auth and its identity, so
+  revoking a host is deleting one row.
+- `api/src/agents/`: `payload.ts` (zod validation at the boundary; every host metric nullable so
+  a partially-readable host still reports the rest), `repo.ts` (CRUD + 32-byte hex token, the
+  `backups/targetsRepo.ts` pattern — returned once at creation, masked on every read; the
+  `hosts` row is created at *registration* time so a registered-but-undeployed agent is visible
+  as `status: "unknown"` rather than invisible), `ingest.ts` (impure; **reuses
+  `collector/diff.ts`** so an agent-reported container produces byte-identical rows and
+  lifecycle events to a locally-polled one — the dashboard, event timeline, and health engine
+  genuinely cannot tell which host a container came from), `health.ts` (pure `evaluateAgentHealth`
+  + impure `gatherAgentSnapshots`).
+- **Remote health runs through the same engine, not a parallel path.** `agents/health.ts` feeds
+  each fresh agent's host metrics + container rows into `health/engine.ts`'s `evaluateHealth`,
+  and `health/cycle.ts` merges the result into the one shared reconcile/persist/score pass
+  alongside local host, container, and backup conditions — exactly how Milestone 4 folded in
+  backup freshness. Consequence, confirmed live: BMAX's real 91.5% disk opened a `disk_critical`
+  (penalty 30) and moved the whole homelab's score to critical/30. New code
+  `agent_unreachable` (critical, penalty 20, matching the spec's "collector/node unavailable")
+  fires when an agent misses 3 consecutive expected intervals. Two deliberate non-obvious
+  choices: a **stale** agent's last-known metrics are *not* scored (otherwise a dead host's
+  stale "CPU high" — or stale "all fine" — would sit in the attention queue forever), and a
+  **never-reported** agent produces no condition at all (that's a setup state, not a regression;
+  it stays visible in `GET /hosts`). The local collector cycle is also what detects staleness —
+  an agent that has stopped reporting obviously can't report its own absence.
+- `agent/` (new top-level dir): `agent.sh` + `Dockerfile` + `docker-compose.yml` + `.env.example`
+  + `README.md`. **POSIX shell + curl + jq on alpine:3.21 (~14MB image), not Node**, because the
+  first target host runs a production workload on 2 weak cores — idle cost is a sleeping busybox
+  `sh` (measured 880KiB RSS, 0.00% CPU) instead of a resident language runtime. One Docker API
+  call and one POST per 30s interval, nothing in between. Runs as `nobody`, `read_only: true`,
+  `cap_drop: ALL`, `mem_limit: 32m`, `cpus: 0.25`. Same socket-proxy boundary as the server
+  (`CONTAINERS`/`INFO`/`PING`, `POST=0`) — the agent never mounts `docker.sock` and has no code
+  path that could start/stop/modify a container. Both containers cap their json-file logs at
+  1MB×2, because filling a monitored host's disk with monitoring logs would be an own goal.
+- API additions: `GET/POST/DELETE /api/v1/agents` and rate-limited (60/min/token)
+  `POST /api/v1/agents/:token/report`. The server stamps every report's observation time itself
+  rather than trusting the agent's clock, so a host with no NTP or a dead RTC can't poison the
+  time series or the retention windows. `GET /api/v1/hosts` widened from bare identity fields to
+  carry `kind` (local|agent) + latest CPU/memory/disk + container count + agent version, so the
+  multi-host dashboard needs one call. `GET /api/v1/containers` gained `hostId` — it stopped
+  being a constant now that two hosts can each run a container named `postgres`.
+- Schema: added `agents` (+ migration `0004_mysterious_talon.sql`). Deleting an agent removes
+  only the registration, never the `hosts`/`containers`/`metric_samples` rows it produced —
+  those are real observed history (and FK'd). Migration applied cleanly against the existing
+  populated production volume, which doubled as this milestone's upgrade test.
+- `web/`: a Hosts panel above the attention queue (one card per host, capacity as a number +
+  threshold badge per the "no decorative charts" rule, labeled local vs agent because the two
+  fail differently), a "Remote agents" panel under Operations (register → token shown once,
+  pending/reporting/stale per agent, delete), and a host column on the container list that only
+  appears once >1 host is tracked. No new dependency.
+- Tests: `tests/agentHealth.test.ts` (pure staleness/eval, incl. the stale-metrics-not-scored and
+  never-reported cases), `tests/agentRoutes.test.ts` (registration, token masking, ingest,
+  lifecycle events, the omitted-vs-empty `containers` distinction). 144 total, up from 118.
+- **Verified end-to-end against real hardware, both directions.** Server rebuilt and left running
+  on MACMINI; agent deployed to BMAX over SSH; `GET /api/v1/hosts` shows both hosts with live
+  numbers, and all 5 BMAX containers (3 Immich + the 2 agent containers) appear with correct
+  state/health/Compose project. Failure mode tested by stopping only the agent container: the
+  server opened `agent_unreachable`, and restarting it self-healed on the next cycle.
+- **Not torn down.** Unlike Milestones 1-5's build-verify-teardown pattern, both the MACMINI
+  server and the BMAX agent are left running — as of Milestone 6 this is a production service,
+  and an agent that only runs during a verification window monitors nothing.
+
+### Immich safety constraints (BMAX)
+
+BMAX runs a **production Immich stack** (`/home/wawan/immich/`, Compose project `immich`,
+containers `immich_server`/`immich_postgres`/`immich_redis`, ~2 months uptime) on an Intel N4000
+with 2 cores and a **97%-full 128GB disk**. That shaped several choices above and is worth
+keeping in mind before touching this host again:
+
+- The agent is its **own Compose project** (`name: kangops-agent`, in `/home/wawan/kangops-agent/`)
+  with its own container names and network. `/home/wawan/immich/docker-compose.yml` was read for
+  conflict-checking and **never modified**; no Immich container was restarted, stopped, or
+  reconfigured at any point (verified by container ID + "Up 2 months" before and after).
+- No port conflict is possible: the agent publishes nothing at all. Immich holds only 2283.
+- The disk headroom (~4GB) is why the agent image is alpine-sized and why both its containers
+  have capped logs. Note the disk is *legitimately* near-full, so KangOps will keep reporting
+  `disk_critical` for BMAX until someone frees space — that's a true signal, not a false alarm.
+
+### Known gotchas (Milestone 7, in addition to Milestone 4's below)
+
+- **busybox `awk` converts to a 32-bit signed int for `%d`.** `printf "%d", total*1024` on an
+  8GB `MemTotal` silently produced `-2147483648`, which the server then (correctly) rejected as
+  an invalid payload — the agent's first deployment reported HTTP 400 on every cycle for exactly
+  this reason. awk holds numbers as doubles, so `%.0f` prints the real value. Every byte count in
+  `agent/agent.sh` uses `%.0f` for this reason; anything over 2GB would otherwise break.
+- **`MemAvailable`, not `MemFree`, for an agent host.** The local collector uses Node's
+  `os.freemem()` (= `MemFree`). On a Linux host up for months, nearly all spare RAM is
+  reclaimable page cache, so `MemFree` reads as ~95% used and would open a permanent, meaningless
+  `host_memory_high` condition. BMAX: 21.9% by `MemAvailable` vs ~92% by `MemFree`. The two
+  collection paths therefore disagree slightly by design — documented in `agent.sh`.
+- **busybox `df` wraps long device names onto their own line**, shifting every positional field.
+  `agent/agent.sh` indexes df fields from the end (`$(NF-3)`/`$(NF-4)`) so both layouts parse.
+- **Docker's `/containers/json` carries no `RestartCount`** (only `/containers/{id}/json` does),
+  and its health state is only available as a suffix on the human-readable `Status` string
+  (`"Up 2 months (healthy)"`). The agent parses that suffix and reports `restartCount: 0`, rather
+  than paying an inspect round trip per container per tick on a weak host. Consequence: the
+  `restart_loop` condition cannot fire for agent-monitored containers, and per-container
+  cpu/memory stats aren't collected for them either.
+- **`DOCKER_CONFIG` also controls where the Docker CLI finds its plugins.** Pointing it at a
+  scratch dir to dodge a hung `docker-credential-desktop` (macOS keychain prompt, which stalls
+  `docker compose build` indefinitely in a non-interactive session) makes `docker compose`
+  itself vanish with "unknown command". Symlink `~/.docker/cli-plugins` into the scratch config
+  dir as well.
+
 **Milestone 6 (KangOps rebrand) — complete, 2026-09-13.**
 
 - Pure rebranding milestone: no stack changes, no new features, no config-surface changes. The

@@ -3,7 +3,11 @@
 Local-first Docker observability and control tower for a homelab. Not a Portainer clone —
 prioritizes understanding ("is my homelab healthy, and why") over full Docker administration.
 
-**Status: Milestone 4 (Notification and operational context) complete.** The API collects real
+**Status: Milestone 7 (Multi-host agents) complete.** KangOps monitors its own host plus any
+number of remote hosts, each running the small push agent in [`agent/`](./agent/README.md) — see
+that README for why the agent dials out instead of being polled. Earlier milestones:
+
+**Milestone 4 (Notification and operational context).** The API collects real
 container facts, scores health/history (Milestone 3), and now also sends webhook alerts on new
 attention/critical conditions, checks configured backup targets for freshness (filesystem mtime
 and/or an authenticated result webhook), optionally checks Docker Hub for newer image digests
@@ -16,6 +20,8 @@ See [`CLAUDE.md`](./CLAUDE.md) for the full product spec, architecture, and road
 ## Documentation
 
 - [`docs/install.md`](./docs/install.md) — install and upgrade
+- [`agent/README.md`](./agent/README.md) — monitoring a second host: what the push agent
+  collects, what it deliberately doesn't, and how to deploy it
 - [`docs/reverse-proxy-and-auth.md`](./docs/reverse-proxy-and-auth.md) — KangOps has no
   built-in auth; how to expose it safely
 - [`docs/backup.md`](./docs/backup.md) — backing up/restoring KangOps's own database
@@ -108,6 +114,25 @@ root on the host), so:
 - [x] Dependency view never infers edges from shared networks (not even collected) — only
       Compose-project co-membership (explicitly labeled non-causal) and explicit user
       annotations.
+
+### Milestone 7 additions
+
+- [x] A monitored remote host opens **no inbound port** and exposes no Docker socket off-host —
+      the agent only makes outbound POSTs (`agent/README.md`).
+- [x] On the monitored host, the same socket-proxy boundary applies as on the server: the agent
+      never mounts `docker.sock`, and the proxy in front of it allowlists `CONTAINERS`/`INFO`/
+      `PING` with `POST=0`, so no write/control call can traverse it. The agent itself runs as
+      `nobody` with a read-only root filesystem and all capabilities dropped.
+- [x] `POST /api/v1/agents/:token/report` uses a high-entropy (32-byte) per-agent token as its
+      only auth, is rate-limited per token, and validates the whole payload with zod at the
+      boundary. The token is returned once at registration; every read masks it.
+- [x] The agent never logs its token (including via curl's own error output, which embeds the
+      effective URL — hence `-s` rather than `-sS`).
+- [x] The server timestamps reports itself rather than trusting a remote clock, so a host with
+      no NTP can't poison the time series or the retention windows.
+- [ ] Settings/API auth — still deliberately out of scope, now also covering the agent
+      registration endpoints. `POST /api/v1/agents` is as protected as `/settings` is, i.e. by
+      whatever fronts the dashboard (see `docs/reverse-proxy-and-auth.md`).
 
 ## Checks
 
