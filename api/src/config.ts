@@ -18,6 +18,17 @@ const EnvSchema = z.object({
   DOCKER_MODE: z.enum(["fixture", "socket"]).default("fixture"),
   DOCKER_HOST: z.string().default("tcp://docker-socket-proxy:2375"),
 
+  // Milestone 8: container control (start/stop/restart) is opt-in at deploy time, off by
+  // default -- per the spec's "separately enabled" control-action principle. When true, talks
+  // to a second, write-scoped docker-socket-proxy sidecar (never the read one) over
+  // DOCKER_CONTROL_HOST. Only meaningful when DOCKER_MODE is "socket" -- fixture mode has
+  // nothing real to control, so the control routes report unavailable regardless of this flag.
+  CONTAINER_CONTROL_ENABLED: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  DOCKER_CONTROL_HOST: z.string().default("tcp://docker-socket-proxy-control:2375"),
+
   // Collection loop tuning -- bounded so a hung/slow Docker API call can never wedge the loop
   // forever. Defaults land inside the UX spec's "modest default interval (15-30s)".
   COLLECTOR_INTERVAL_MS: z.coerce.number().int().positive().default(20_000),

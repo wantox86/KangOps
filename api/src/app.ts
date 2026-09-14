@@ -14,11 +14,17 @@ import { registerBackupRoutes } from "./routes/backups.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerDependencyRoutes } from "./routes/dependencies.js";
 import { registerAgentRoutes } from "./routes/agents.js";
+import { registerContainerControlRoutes } from "./routes/containerControl.js";
+import type { DockerControlAdapter } from "./docker/types.js";
 
 export interface BuildAppOptions {
   sqlite: Database.Database;
   db: DbClient;
   logLevel?: string;
+  // Milestone 8: undefined (the default, matches CONTAINER_CONTROL_ENABLED=false) means the
+  // control routes exist but report 501 -- a misconfigured/disabled deployment is visible in
+  // the API response, not just an absent route.
+  controlAdapter?: DockerControlAdapter | undefined;
 }
 
 // Separated from index.ts so tests can build a fully-wired app against an isolated test DB
@@ -42,6 +48,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   registerImageRoutes(app, options.db);
   registerDependencyRoutes(app, options.db);
   registerAgentRoutes(app, options.db);
+  registerContainerControlRoutes(app, options.db, options.controlAdapter);
 
   return app;
 }

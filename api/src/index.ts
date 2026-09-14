@@ -4,6 +4,7 @@ import { runMigrations } from "./db/migrate.js";
 import { buildApp } from "./app.js";
 import { createFixtureAdapter } from "./docker/fixtureAdapter.js";
 import { createDockerodeAdapter } from "./docker/dockerodeAdapter.js";
+import { createDockerodeControlAdapter } from "./docker/dockerControlAdapter.js";
 import { startCollector, type Collector } from "./collector/loop.js";
 
 const LOCAL_HOST_ID = "local";
@@ -17,7 +18,15 @@ async function main(): Promise<void> {
   runMigrations(config.DATABASE_PATH);
 
   const { db, sqlite } = createDb(config.DATABASE_PATH);
-  const app = buildApp({ sqlite, db, logLevel: config.LOG_LEVEL });
+
+  // Milestone 8: only wired up when both opted in (CONTAINER_CONTROL_ENABLED=true) and talking
+  // to a real Docker endpoint -- fixture mode has nothing real to control.
+  const controlAdapter =
+    config.CONTAINER_CONTROL_ENABLED && config.DOCKER_MODE === "socket"
+      ? createDockerodeControlAdapter(config.DOCKER_CONTROL_HOST, config.COLLECTOR_TIMEOUT_MS)
+      : undefined;
+
+  const app = buildApp({ sqlite, db, logLevel: config.LOG_LEVEL, controlAdapter });
 
   const adapter =
     config.DOCKER_MODE === "socket" ? createDockerodeAdapter(config.DOCKER_HOST, config.COLLECTOR_TIMEOUT_MS) : createFixtureAdapter();

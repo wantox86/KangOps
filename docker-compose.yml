@@ -33,6 +33,35 @@ services:
     # No `ports:` -- only reachable by other services on the compose network, never published
     # to the host.
 
+  # Write-scoped Docker socket proxy (Milestone 8, container control). Deliberately a *second*,
+  # separate sidecar rather than widening the read proxy above: this image's CONTAINERS=1
+  # allow-rule matches any HTTP method on any /containers/* path, not just GET, so turning on
+  # POST on the *same* proxy that also has CONTAINERS=1 would silently reopen create/exec/
+  # remove/prune alongside the 3 actions actually wanted. Keeping CONTAINERS=0 here means only
+  # the narrow ALLOW_START/ALLOW_STOP/ALLOW_RESTARTS rules can ever match -- confirmed against
+  # this image's haproxy.cfg.template by hand before writing this. Same read-only-socket-mount /
+  # cap_drop hardening as docker-socket-proxy above; not read_only for the same reason (its
+  # entrypoint sed's haproxy.cfg from these env vars at startup).
+  docker-socket-proxy-control:
+    image: tecnativa/docker-socket-proxy:0.2.0
+    restart: unless-stopped
+    environment:
+      POST: 1
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      ALLOW_RESTARTS: 1
+      CONTAINERS: 0
+      INFO: 0
+      PING: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # No `ports:` -- only reachable by other services on the compose network, never published
+    # to the host.
+
   api:
     build: ./api
     restart: unless-stopped
@@ -41,8 +70,14 @@ services:
       DATABASE_PATH: /data/kangops.sqlite
       DOCKER_MODE: socket
       DOCKER_HOST: tcp://docker-socket-proxy:2375
+      # Opt-in per config.ts's default -- CLAUDE.md/.env documents the risk (no auth yet) before
+      # a homelab owner flips this. Left on here since this deployment's owner explicitly chose
+      # to enable it now (see Milestone 8 entry in CLAUDE.md's Current State).
+      CONTAINER_CONTROL_ENABLED: "true"
+      DOCKER_CONTROL_HOST: tcp://docker-socket-proxy-control:2375
     depends_on:
       - docker-socket-proxy
+      - docker-socket-proxy-control
     volumes:
       - kangops_data:/data
     # No Docker socket mount here -- collection goes through docker-socket-proxy above, never a

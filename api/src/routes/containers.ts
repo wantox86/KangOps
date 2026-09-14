@@ -132,10 +132,11 @@ export function registerContainerRoutes(app: FastifyInstance, db: DbClient): voi
 
   const patchBodySchema = z.object({ critical: z.boolean() });
 
-  // The only write surface this app has anywhere -- and it only ever flips a local
-  // configuration flag (per CLAUDE.md's "user configuration for critical services"), never
-  // touches Docker. Kept on the same route file as the read endpoints above since it's the
-  // same resource, not a new trust boundary.
+  // This only ever flips a local configuration flag (per CLAUDE.md's "user configuration for
+  // critical services"), never touches Docker -- kept on the same route file as the read
+  // endpoints above since it's the same resource, not a new trust boundary. The app's actual
+  // Docker-mutating write surface is routes/containerControl.ts (Milestone 8), deliberately
+  // separate since that one requires an opt-in adapter and a different trust boundary.
   app.patch<{ Params: { id: string } }>(
     "/api/v1/containers/:id",
     { schema: { response: { 200: containerSchema } } },
