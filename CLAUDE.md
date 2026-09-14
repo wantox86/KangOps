@@ -15,6 +15,98 @@
 
 ## Current State
 
+**Milestone 8 (Container control) — complete, 2026-09-14. Local host only, no auth yet.**
+
+The app's first genuinely Docker-mutating write surface. Everything before this milestone was
+provably read-only (`DockerReadAdapter` has no write methods anywhere); this milestone adds one
+deliberate, narrow exception rather than loosening that guarantee.
+
+- **Scope, as explicitly decided by the homelab owner**: start, stop, and restart (not the
+  spec's more conservative "restart-only" suggestion) — for the **local host only**. No control
+  path exists or was added for agent-reported remote hosts (BMAX) — the agent still never mounts
+  `docker.sock` and has no code path that could mutate a container, unchanged from Milestone 7.
+  **Auth is still not implemented** (deliberately deferred to the last milestone, a standing
+  decision reconfirmed here) — this means anyone who can reach the dashboard on the LAN can
+  start/stop/restart any local container right now. Documented as an accepted risk, not an
+  oversight; see `docs/reverse-proxy-and-auth.md` for the interim mitigation (reverse-proxy auth
+  or LAN-only) and `~/work-agent/CLAUDE.md`'s KangOps entry for the homelab-level warning.
+- **A second, write-scoped `docker-socket-proxy` sidecar** (`docker-socket-proxy-control` in
+  `docker-compose.yml`), not a widened version of the existing read-only one. Reason, confirmed
+  by reading `tecnativa/docker-socket-proxy:0.2.0`'s actual `haproxy.cfg.template` before writing
+  any code: its `CONTAINERS=1` allow-rule matches **any HTTP method** on any `/containers/*`
+  path, not just GET — so turning on `POST`/`ALLOW_*` on the *same* proxy that also has
+  `CONTAINERS=1` (needed for the read adapter) would silently reopen `/containers/create`,
+  `/containers/{id}` (exec), prune, etc. alongside the 3 intended actions, because that broader
+  allow-rule is evaluated after the narrow ones and doesn't care which method matched. The
+  control proxy therefore runs with `CONTAINERS=0, INFO=0, PING=0, POST=1, ALLOW_START=1,
+  ALLOW_STOP=1, ALLOW_RESTARTS=1` — confirmed live post-deploy: `POST /containers/create` and
+  `GET /containers/json` against this proxy both return 403, only the 3 allowlisted
+  start/stop/restart request shapes succeed. Same hardening as the read proxy (`:ro` socket
+  mount, `cap_drop: ALL`, `no-new-privileges`, not `read_only` for the same haproxy-config-sed
+  reason documented on that service).
+- `api/src/docker/types.ts`: new `DockerControlAdapter` interface (`startContainer`/
+  `stopContainer`/`restartContainer`), deliberately **not merged into** `DockerReadAdapter` — every
+  existing read-path caller stays provably incapable of mutating anything, by type. Real
+  implementation in `docker/dockerControlAdapter.ts` (dockerode against `DOCKER_CONTROL_HOST`,
+  the control proxy above).
+- **Opt-in via config**, off by default: `CONTAINER_CONTROL_ENABLED` (default `false`) +
+  `DOCKER_CONTROL_HOST`. `index.ts` only constructs the real control adapter when
+  `CONTAINER_CONTROL_ENABLED=true` **and** `DOCKER_MODE=socket`; otherwise `buildApp` gets
+  `controlAdapter: undefined` and every control route reports `501 not_enabled` rather than
+  silently no-op'ing — a misconfigured/disabled deployment is visible in the API response, not
+  just an absent route. `docker-compose.yml` sets it `true` for this deployment (the owner's
+  explicit choice); `.env.example` documents the no-auth risk and defaults to `false` for local/
+  fixture dev.
+- `api/src/routes/containerControl.ts`: `POST /api/v1/containers/:id/{start,stop,restart}`.
+  Kept in its own file rather than folded into `containers.ts`'s existing `PATCH` (which only
+  ever flips the local `critical` flag, never touches Docker) since this is a different trust
+  boundary. Checks, in order: control enabled (else 501) → container known to this server (else
+  404) → `hostId === "local"` (else 400 `unsupported_host` — agent hosts have no control path)
+  → call the adapter. **Every attempt, success or failure, is audit-logged** to the existing
+  `events` table (`source: "container_control"`, `type: "container_{action}"`,
+  `severity: "info"|"warning"`) — no new table needed, the existing lifecycle-event log already
+  had exactly the right shape (hostId, containerId, occurredAt, source, type, severity, summary).
+- `web/`: `ContainerControlPanel` on the container detail view, local-host containers only.
+  Every action requires a native `window.confirm()` before the request fires (per the spec's
+  "control action is separately enabled and visibly confirmed" principle) — deliberately no new
+  dependency/custom modal, matches the rest of `web/`'s plain-forms style. Start disabled when
+  already running; stop/restart disabled when not running — a UX nicety only, the API's own
+  checks are the real enforcement.
+- Tests: `tests/containerControl.test.ts` (501-when-disabled, 404-unknown, 400-non-local-host,
+  all 3 actions call the right adapter method and record a success audit event, adapter throw →
+  502 + failure audit event). 151 tests total, up from 144.
+- **Verified end-to-end against real hardware.** `docker compose build && docker compose up -d`
+  on the real MACMINI Docker host — all 4 containers (`docker-socket-proxy`,
+  `docker-socket-proxy-control`, `api`, `web`) healthy. Called the real API directly against a
+  real (low-risk, non-production) container: `stop` → confirmed `docker ps` showed it exited,
+  `start` → confirmed running again, `restart` → confirmed a fresh uptime, each followed by
+  confirming the matching audit event landed in `GET /api/v1/containers/:id`. Then confirmed the
+  control proxy's own allowlist boundary directly (not just through the app): `GET
+  /containers/json` and `POST /containers/create` against `docker-socket-proxy-control` both
+  403'd, proving the earlier haproxy-template read was correct and the narrow scope actually
+  holds, not just in theory.
+- **Not torn down** — same as every milestone since Milestone 6, this is a production service;
+  left running with the new control surface live.
+
+### Known gotchas (Milestone 8)
+
+- **This milestone was dispatched to two background subagents concurrently by mistake**, and a
+  third (a sub-agent one of them spawned per this file's own "delegate complex sub-parts"
+  suggestion) actually started editing the same files at the same time as a human-directed
+  session doing the identical work by hand. The colliding agent noticed the conflict itself
+  (via changing file mtimes and a stray second `claude --print` process) and correctly stopped
+  before running `docker compose up --build`, testing container actions, or committing/pushing
+  — no production impact — but the repo was left with 3 different partial/conflicting
+  implementations of the same milestone as uncommitted changes. Resolved by discarding all
+  uncommitted work (`git checkout -- .` + removing the new untracked files; nothing was lost
+  since nothing had been committed yet) and redoing the milestone as one single actor. Worth
+  remembering before dispatching another background dev task while also considering doing it by
+  hand in the same session.
+- **`exactOptionalPropertyTypes: true` (already on in `tsconfig`) rejects `foo?: T` when a
+  caller explicitly passes `undefined`** for that property — needs `foo?: T | undefined` on the
+  interface, not just the `?`. Hit this wiring `BuildAppOptions.controlAdapter`, since
+  `index.ts` computes `controlAdapter` as `T | undefined` and passes it through unconditionally.
+
 **Milestone 7 (Multi-host agents) — complete, 2026-09-13. First remote host: BMAX.**
 
 This is the milestone where "KangOps monitors the host it runs on" stops being true. It is a
