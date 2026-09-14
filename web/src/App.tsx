@@ -157,6 +157,70 @@ function ContainerMetricsPanel({ id }: { id: string }): React.JSX.Element {
   );
 }
 
+type ControlAction = "start" | "stop" | "restart";
+
+const CONTROL_ACTION_LABELS: Record<ControlAction, string> = { start: "Start", stop: "Stop", restart: "Restart" };
+
+// Milestone 8: every action requires an explicit native confirm() before the request fires --
+// per CLAUDE.md's "control action is separately enabled and visibly confirmed" principle, and
+// deliberately window.confirm rather than a custom modal (no new dependency, matches the rest
+// of this file's plain-forms style). Only offered for a running/known local-host container;
+// containerControl.ts's 400/404/501 responses are still the real enforcement, this is just UX.
+function ContainerControlPanel({
+  dockerId,
+  containerName,
+  state,
+  hostId,
+  onDone,
+}: {
+  dockerId: string;
+  containerName: string;
+  state: string;
+  hostId: string;
+  onDone: () => void;
+}): React.JSX.Element | null {
+  const [pending, setPending] = useState<ControlAction | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (hostId !== "local") return null;
+
+  async function run(action: ControlAction): Promise<void> {
+    if (!window.confirm(`${CONTROL_ACTION_LABELS[action]} container "${containerName}"?`)) return;
+    setPending(action);
+    setError(null);
+    try {
+      const response = await fetch(`/api/v1/containers/${dockerId}/${action}`, { method: "POST" });
+      if (!response.ok) {
+        const body = (await response.json()) as { message?: string };
+        throw new Error(body.message ?? `HTTP ${response.status}`);
+      }
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  const canStart = state !== "running";
+  const canStopOrRestart = state === "running" || state === "restarting";
+
+  return (
+    <p className="control-actions">
+      <button type="button" disabled={pending !== null || !canStart} onClick={() => void run("start")}>
+        {pending === "start" ? "Starting…" : "Start"}
+      </button>{" "}
+      <button type="button" disabled={pending !== null || !canStopOrRestart} onClick={() => void run("stop")}>
+        {pending === "stop" ? "Stopping…" : "Stop"}
+      </button>{" "}
+      <button type="button" disabled={pending !== null || !canStopOrRestart} onClick={() => void run("restart")}>
+        {pending === "restart" ? "Restarting…" : "Restart"}
+      </button>
+      {error && <span className="error"> {error}</span>}
+    </p>
+  );
+}
+
 function ContainerDetailPanel({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }): React.JSX.Element {
   const state = useJsonFetch<ContainerDetail>(`/api/v1/containers/${id}`, [id]);
   const [saving, setSaving] = useState(false);
@@ -195,6 +259,14 @@ function ContainerDetailPanel({ id, onClose, onChanged }: { id: string; onClose:
               {state.data.container.critical ? "★ Critical (click to unmark)" : "☆ Mark as critical"}
             </button>
           </p>
+
+          <ContainerControlPanel
+            dockerId={id}
+            containerName={state.data.container.name}
+            state={state.data.container.state}
+            hostId={state.data.container.hostId}
+            onDone={onChanged}
+          />
 
           <h3>Metrics (last 24h)</h3>
           <ContainerMetricsPanel id={id} />
