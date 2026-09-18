@@ -15,6 +15,32 @@
 
 ## Current State
 
+**Portal page — added 2026-09-18 (after Milestone 8, outside the milestone numbering).**
+
+A curated link hub for every homelab service, reachable at `#/portal` (linked from the main
+page tagline). Serves `GET /api/v1/portal` from a **static, checked-in catalog** at
+`api/src/portal/catalog.ts` — deliberately not DB rows and not Docker introspection:
+
+- Docker introspection can't see native services (9router, filebrowser, cloudflared, RustDesk,
+  SMB…) and can't know which published port is the "front door" worth linking.
+- A curated catalog is honest about **status** (dead tunnel hostnames like `server.*`/Ollama
+  stay listed with `status: "dead"` instead of silently vanishing) and about **exposure**
+  (public-via-tunnel vs LAN-only) — neither is discoverable from the Docker API.
+- Grouping is fixed: public first, then LAN per host (macmini → bmax → hpmini).
+
+**MAINTENANCE RULE: the catalog is the portal's source of truth. When the homelab changes
+(new service, new tunnel hostname, service retired, IP change), update
+`api/src/portal/catalog.ts` in the same commit.** It covers Docker AND native services across
+all 3 machines; each entry carries host/runtime/exposure/status plus public `url` and
+optional `lanUrl`.
+
+Web side uses **hash routing** (`#/portal`) — no react-router, keeping `web/` zero-dependency
+per the repo's plain-forms style. nginx already had the SPA fallback so no config change was
+needed. Tests: `api/tests/portal.test.ts` (grouping order, no dropped entries, dead entries
+stay visible, URL shape invariants). Also on 2026-09-18: `GET /api/v1/containers` now
+excludes `removed` tombstones (they stay in the DB as event history; every other read surface
+already skipped them).
+
 **Milestone 8 (Container control) — complete, 2026-09-14. Local host only, no auth yet.**
 
 The app's first genuinely Docker-mutating write surface. Everything before this milestone was
