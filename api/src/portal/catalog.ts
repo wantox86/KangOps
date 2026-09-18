@@ -161,12 +161,12 @@ export const PORTAL_CATALOG: PortalEntry[] = [
   },
   {
     name: "VeilKeeper Web (legacy UI)",
-    description: "Legacy vault frontend, paired with veilkeeper-api :18091. Not tunneled.",
+    description: "Legacy vault frontend, paired with veilkeeper-api :18091. Not tunneled. Serves HTTPS only — plain http:// gets a 400.",
     host: "macmini",
     runtime: "docker",
     exposure: "lan",
     status: "live",
-    url: "http://192.168.50.131:18092",
+    url: "https://192.168.50.131:18092",
   },
   {
     name: "Chromium (LinuxServer)",
