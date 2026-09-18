@@ -71,8 +71,8 @@ export const PORTAL_CATALOG: PortalEntry[] = [
     lanUrl: "http://192.168.50.131:8090/health",
   },
   {
-    name: "VeilKeepers (sprint 3)",
-    description: "Password vault backend — current generation, target of the Android app. API only — root returns 404, that's normal.",
+    name: "VeilKeepers",
+    description: "Password vault backend — current/final generation, target of the Android app. Compose project + containers: veilkeepers-api / veilkeepers-mysql (runs from the git repo). API only — root returns 404, that's normal.",
     host: "macmini",
     runtime: "docker",
     exposure: "public",
@@ -82,7 +82,7 @@ export const PORTAL_CATALOG: PortalEntry[] = [
   },
   {
     name: "VeilKeeper (legacy)",
-    description: "First-generation vault API. Superseded by sprint 3; kept for reference. API only — root returns 404, that's normal.",
+    description: "First-generation vault API (singular 'veilkeeper'). Superseded by VeilKeepers; kept for reference. API only — root returns 404, that's normal.",
     host: "macmini",
     runtime: "docker",
     exposure: "public",
