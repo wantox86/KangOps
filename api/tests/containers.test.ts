@@ -62,6 +62,34 @@ describe("container routes", () => {
     expect(body.containers[0]?.dockerId).toBe("c1");
   });
 
+  it("GET /api/v1/containers excludes removed containers", async () => {
+    testDb.db
+      .insert(containers)
+      .values({
+        dockerId: "c-gone",
+        hostId: "local",
+        currentName: "old-web",
+        imageRef: "nginx:1.26",
+        imageDigest: null,
+        composeProject: "proj",
+        composeService: "old-web",
+        currentState: "removed",
+        currentHealth: "none",
+        restartCount: 0,
+        critical: false,
+        firstSeenAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+      })
+      .run();
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/containers" });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ containers: Array<{ dockerId: string; state: string }> }>();
+    // The removed row stays in the DB (event history) but must not show up in the list.
+    expect(body.containers).toHaveLength(1);
+    expect(body.containers.map((c) => c.dockerId)).toEqual(["c1"]);
+  });
+
   it("GET /api/v1/containers/:id returns the container and its events", async () => {
     const response = await app.inject({ method: "GET", url: "/api/v1/containers/c1" });
     expect(response.statusCode).toBe(200);

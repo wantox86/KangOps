@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { DbClient } from "../db/client.js";
@@ -92,7 +92,11 @@ function toApiShape(row: typeof containers.$inferSelect) {
 // permanent public contract"). Every field here is our normalized shape, not a raw passthrough.
 export function registerContainerRoutes(app: FastifyInstance, db: DbClient): void {
   app.get("/api/v1/containers", { schema: { response: { 200: listResponseSchema } } }, async () => {
-    const rows = db.select().from(containers).all();
+    // "removed" rows are kept in the DB as event history (so past events/alerts stay
+    // resolvable), but they're not something the dashboard should list — the container no
+    // longer exists. Every other read surface (summary, hosts, health cycle) already skips
+    // them; the list route should too.
+    const rows = db.select().from(containers).where(ne(containers.currentState, "removed")).all();
     return { containers: rows.map(toApiShape) };
   });
 
