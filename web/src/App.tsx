@@ -64,6 +64,27 @@ interface MetricsResponse {
   points: MetricPoint[];
 }
 
+interface PortalEntry {
+  name: string;
+  description: string;
+  host: "macmini" | "bmax" | "hpmini";
+  runtime: "docker" | "native";
+  exposure: "public" | "lan";
+  status: "live" | "dead";
+  url?: string;
+  lanUrl?: string;
+}
+
+interface PortalGroup {
+  id: string;
+  title: string;
+  entries: PortalEntry[];
+}
+
+interface PortalResponse {
+  groups: PortalGroup[];
+}
+
 type LoadState<T> = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; data: T };
 
 function useJsonFetch<T>(url: string, deps: unknown[] = []): LoadState<T> {
@@ -859,7 +880,93 @@ function OperationsSection({ containers }: { containers: ContainerSummary[] }): 
   );
 }
 
+function PortalPage({ onBack }: { onBack: () => void }): React.JSX.Element {
+  const portal = useJsonFetch<PortalResponse>("/api/v1/portal");
+
+  return (
+    <main className="shell">
+      <div className="portal-header">
+        <button type="button" className="link-btn" onClick={onBack}>
+          ← KangOps
+        </button>
+        <h1>Portal</h1>
+      </div>
+      <p className="tagline">
+        Every homelab service — public (Cloudflare tunnel) and LAN-only, Docker and native. The catalog lives in{" "}
+        <code>api/src/portal/catalog.ts</code>; update it when the homelab changes.
+      </p>
+
+      {portal.status === "loading" && <p>Loading portal…</p>}
+      {portal.status === "error" && <p className="error">Could not reach the API: {portal.message}</p>}
+      {portal.status === "ready" && (
+        <div className="portal-groups">
+          {portal.data.groups.map((group) => (
+            <section className="portal-group" key={group.id}>
+              <h2>{group.title}</h2>
+              <div className="portal-cards">
+                {group.entries.map((entry) => (
+                  <div className={`portal-card${entry.status === "dead" ? " portal-card-dead" : ""}`} key={entry.name}>
+                    <div className="portal-card-title">
+                      {entry.url && entry.status === "live" ? (
+                        <a href={entry.url} target="_blank" rel="noreferrer">
+                          {entry.name}
+                        </a>
+                      ) : (
+                        <span>{entry.name}</span>
+                      )}
+                      <span className="portal-card-badges">
+                        <span className={`badge badge-${entry.runtime === "docker" ? "good" : "neutral"}`}>{entry.runtime}</span>
+                        {entry.status === "dead" && <span className="badge badge-bad">dead</span>}
+                      </span>
+                    </div>
+                    <p className="tagline">{entry.description}</p>
+                    <p className="portal-card-urls">
+                      {entry.url && (
+                        <a href={entry.url} target="_blank" rel="noreferrer">
+                          {entry.url.replace(/^https?:\/\//, "")}
+                        </a>
+                      )}
+                      {entry.lanUrl && (
+                        <a href={entry.lanUrl} target="_blank" rel="noreferrer">
+                          {entry.lanUrl.replace(/^https?:\/\//, "")}
+                        </a>
+                      )}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+    </main>
+  );
+}
+
 export function App(): React.JSX.Element {
+  // Hash routing ("#/portal"): nginx already has the SPA fallback configured, and this keeps
+  // the app dependency-free (no react-router for one extra page).
+  const [route, setRoute] = useState(window.location.hash);
+  useEffect(() => {
+    const onHashChange = (): void => setRoute(window.location.hash);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  if (route === "#/portal") {
+    return (
+      <PortalPage
+        onBack={() => {
+          window.location.hash = "";
+        }}
+      />
+    );
+  }
+
+  return <MainPage />;
+}
+
+function MainPage(): React.JSX.Element {
   const [refreshKey, setRefreshKey] = useState(0);
   const summary = useJsonFetch<SummaryResponse>("/api/v1/summary", [refreshKey]);
   const containersState = useJsonFetch<{ containers: ContainerSummary[] }>("/api/v1/containers", [refreshKey]);
@@ -877,7 +984,10 @@ export function App(): React.JSX.Element {
   return (
     <main className="shell">
       <h1>KangOps</h1>
-      <p className="tagline">Local-first Docker observability — Milestone 7: multi-host agents.</p>
+      <p className="tagline">
+        Local-first Docker observability — Milestone 7: multi-host agents. ·{" "}
+        <a href="#/portal">Portal</a>
+      </p>
 
       {summary.status === "loading" && <p>Loading summary…</p>}
       {summary.status === "error" && <p className="error">Could not reach the API: {summary.message}</p>}
