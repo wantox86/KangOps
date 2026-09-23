@@ -64,10 +64,17 @@ export function createDockerodeAdapter(dockerHost: string, timeoutMs: number): D
     async getStats(dockerId: string): Promise<ContainerStatsSample | null> {
       try {
         const stats = (await docker.getContainer(dockerId).stats({ stream: false }));
+        const usage = stats.memory_stats.usage ?? null;
+        // Raw memory_stats.usage includes the container's page cache (inactive_file). MySQL/
+        // Postgres let cache grow to fill the cgroup, so raw usage drifts to ~100% of the
+        // limit and fires false container_memory_high criticals. Subtract inactive_file to
+        // report the working set -- the same number `docker stats` shows. Fall back to raw
+        // usage when the field is absent (older cgroup drivers).
+        const inactiveFile = stats.memory_stats.stats?.inactive_file ?? 0;
         return {
           dockerId,
           cpuPercent: computeCpuPercent(stats),
-          memoryBytes: stats.memory_stats.usage ?? null,
+          memoryBytes: usage !== null ? Math.max(0, usage - inactiveFile) : null,
           memoryLimitBytes: stats.memory_stats.limit ?? null,
         };
       } catch {
