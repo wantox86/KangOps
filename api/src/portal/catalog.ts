@@ -175,16 +175,6 @@ export const PORTAL_CATALOG: PortalEntry[] = [
     status: "live",
     url: "http://192.168.50.131:3000",
   },
-  {
-    name: "Brave (LinuxServer)",
-    description: "Containerized Brave with KasmVNC web UI (HTTP :3001, HTTPS :3011).",
-    host: "macmini",
-    runtime: "docker",
-    exposure: "lan",
-    status: "live",
-    url: "http://192.168.50.131:3001",
-  },
-
   // ── LAN only — BMAX ─────────────────────────────────────────────────────────
   {
     name: "RustDesk Server",
