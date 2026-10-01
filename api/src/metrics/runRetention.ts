@@ -16,12 +16,17 @@ export function runRetention(db: DbClient, nowIso: string, config: RetentionConf
   const rawSamples = db.select().from(metricSamples).all();
   const { hourly, foldedSampleIds } = downsampleToHourly(rawSamples, rawCutoffIso);
 
-  if (hourly.length > 0) {
-    db.insert(metricSamplesHourly).values(hourly).run();
-  }
-  if (foldedSampleIds.length > 0) {
-    db.delete(metricSamples).where(inArray(metricSamples.id, foldedSampleIds)).run();
-  }
+  // Fold + delete atomically: if the process died between the insert and the delete, the raw rows
+  // would survive and the same (closed) bucket would be folded again on the next cycle, producing
+  // a duplicate hourly row. Wrapping both in one transaction makes the fold all-or-nothing.
+  db.transaction((tx) => {
+    if (hourly.length > 0) {
+      tx.insert(metricSamplesHourly).values(hourly).run();
+    }
+    if (foldedSampleIds.length > 0) {
+      tx.delete(metricSamples).where(inArray(metricSamples.id, foldedSampleIds)).run();
+    }
+  });
 
   db.delete(metricSamplesHourly).where(lt(metricSamplesHourly.bucketStart, hourlyCutoffIso)).run();
 }
