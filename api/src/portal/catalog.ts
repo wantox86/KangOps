@@ -204,7 +204,7 @@ export const PORTAL_CATALOG: PortalEntry[] = [
   },
   {
     name: "SMB Share",
-    description: "Samba file shares on BMAX (moved from HPMINI 2026-10-01): [HpMini] -> /mnt/wd-red/hpmini, [WDPassport] -> /mnt/wd-passport. Access by IP (nmbd off). Mount with smb://192.168.50.163.",
+    description: "Samba file shares on BMAX (moved from HPMINI 2026-10-01): [FilesShared] -> /mnt/wd-red/files-shared, [WDPassport] -> /mnt/wd-passport. Access by IP (nmbd off). Mount with smb://192.168.50.163.",
     host: "bmax",
     runtime: "native",
     exposure: "lan",

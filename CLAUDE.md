@@ -46,8 +46,12 @@ File Browser / Samba move off HPMINI. Verified against the running services and 
 - **File Browser** re-hosted `hpmini` → `bmax`, `lanUrl` `192.168.50.90:8181` →
   `192.168.50.163:8181` (where it actually runs now; the tunnel already pointed at BMAX).
 - **SMB Share** moved from the HPMINI LAN group to BMAX (`smb://192.168.50.163`; shares
-  `[HpMini]` and `[WDPassport]`, access by IP since `nmbd` is off). The stale HPMINI
+  `[FilesShared]` and `[WDPassport]`, access by IP since `nmbd` is off). The stale HPMINI
   `File Browser (direct)` LAN entry was removed (service stopped + disabled there).
+- **Folder rename (2026-10-01):** the WD Red share dir was tidied from `/mnt/wd-red/hpmini/waaaa`
+  to `/mnt/wd-red/files-shared` (the now-empty `hpmini/` parent removed). Updated every consumer:
+  `filebrowser.service` `--root`, Samba share `[HpMini]` → `[FilesShared]` + `path`,
+  `/home/wawan/bin/cleanup-temp.sh`, and the AppArmor `smbd-shares` profile.
 - **History Tracking (WebBeacon)** flipped `live` → `dead` (intentionally stopped since
   2026-09-21; containers + volume still exist, tunnel returns 502).
 
