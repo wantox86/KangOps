@@ -32,11 +32,11 @@ export const PORTAL_CATALOG: PortalEntry[] = [
   // ── Public (Cloudflare tunnel, quezacolt.my.id) ─────────────────────────────
   {
     name: "History Tracking (WebBeacon)",
-    description: "Travel/history tracking app — full stack (frontend, backend, PostGIS, OSRM).",
+    description: "Travel/history tracking app — full stack (frontend, backend, PostGIS, OSRM). Intentionally stopped since 2026-09-21; containers + volume still exist, tunnel currently returns 502.",
     host: "macmini",
     runtime: "docker",
     exposure: "public",
-    status: "live",
+    status: "dead",
     url: "https://ht.quezacolt.my.id",
     lanUrl: "http://192.168.50.131:80",
   },
@@ -102,13 +102,13 @@ export const PORTAL_CATALOG: PortalEntry[] = [
   },
   {
     name: "File Browser",
-    description: "File manager for HPMINI storage (served over the tunnel from MACMINI).",
-    host: "hpmini",
+    description: "File manager for the WD Red share (native service on BMAX; moved from HPMINI 2026-10-01). Exposed via the tunnel.",
+    host: "bmax",
     runtime: "native",
     exposure: "public",
     status: "live",
     url: "https://files.quezacolt.my.id",
-    lanUrl: "http://192.168.50.90:8181",
+    lanUrl: "http://192.168.50.163:8181",
   },
   {
     name: "OpenClaw Gateway",
@@ -202,26 +202,19 @@ export const PORTAL_CATALOG: PortalEntry[] = [
     exposure: "lan",
     status: "live",
   },
-
-  // ── LAN only — HPMINI ───────────────────────────────────────────────────────
-  {
-    name: "File Browser (direct)",
-    description: "Native filebrowser.service on HPMINI — same app as files.quezacolt.my.id.",
-    host: "hpmini",
-    runtime: "native",
-    exposure: "lan",
-    status: "live",
-    url: "http://192.168.50.90:8181",
-  },
   {
     name: "SMB Share",
-    description: "Samba file share (smbd). Mount with smb://192.168.50.90.",
-    host: "hpmini",
+    description: "Samba file shares on BMAX (moved from HPMINI 2026-10-01): [HpMini] -> /mnt/wd-red/hpmini, [WDPassport] -> /mnt/wd-passport. Access by IP (nmbd off). Mount with smb://192.168.50.163.",
+    host: "bmax",
     runtime: "native",
     exposure: "lan",
     status: "live",
-    url: "smb://192.168.50.90",
+    url: "smb://192.168.50.163",
   },
+
+  // ── LAN only — HPMINI ───────────────────────────────────────────────────────
+  // File Browser + Samba were moved off HPMINI to BMAX on 2026-10-01 (both stopped +
+  // disabled on HPMINI now); they are listed under the BMAX LAN group above.
   {
     name: "Apache2 (default)",
     description: "Stock Apache2 install on HPMINI — default page, nothing deployed on it.",

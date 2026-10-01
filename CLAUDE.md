@@ -41,6 +41,16 @@ stay visible, URL shape invariants). Also on 2026-09-18: `GET /api/v1/containers
 excludes `removed` tombstones (they stay in the DB as event history; every other read surface
 already skipped them).
 
+**Catalog sync — 2026-10-01.** The catalog had drifted from the live homelab after the
+File Browser / Samba move off HPMINI. Verified against the running services and corrected:
+- **File Browser** re-hosted `hpmini` → `bmax`, `lanUrl` `192.168.50.90:8181` →
+  `192.168.50.163:8181` (where it actually runs now; the tunnel already pointed at BMAX).
+- **SMB Share** moved from the HPMINI LAN group to BMAX (`smb://192.168.50.163`; shares
+  `[HpMini]` and `[WDPassport]`, access by IP since `nmbd` is off). The stale HPMINI
+  `File Browser (direct)` LAN entry was removed (service stopped + disabled there).
+- **History Tracking (WebBeacon)** flipped `live` → `dead` (intentionally stopped since
+  2026-09-21; containers + volume still exist, tunnel returns 502).
+
 **Milestone 8 (Container control) — complete, 2026-09-14. Local host only, no auth yet.**
 
 The app's first genuinely Docker-mutating write surface. Everything before this milestone was
