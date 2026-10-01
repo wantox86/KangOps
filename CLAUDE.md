@@ -41,6 +41,39 @@ stay visible, URL shape invariants). Also on 2026-09-18: `GET /api/v1/containers
 excludes `removed` tombstones (they stay in the DB as event history; every other read surface
 already skipped them).
 
+**Metrics retention bug fixed — 2026-10-01 (logic bug introduced in Milestone 3; found via a
+"why is the KangOps volume 449M?" spot-check, fixed after Milestone 8).**
+
+`metric_samples_hourly` had grown to ~586k rows (should be ~3.3k — one per entity-hour). Root
+cause was `api/src/metrics/retention.ts`'s `downsampleToHourly`: it folded **any** raw sample older
+than the cutoff, including buckets for the **still-open current hour**. `runRetention` runs every
+collector tick (~20s) and the cutoff slides each tick, so the same open hour was re-folded on every
+cycle, each pass emitting another single-sample rollup row for the same (entity, bucket) — 585,273
+of 585,274 rows had `sample_count = 1`. `PRAGMA integrity_check` was **ok**; this was a logic bug,
+not corruption (distinct from the 2026-09-22 corrupt-DB incident).
+
+- **Fix:** a bucket folds only once it is **fully** older than the cutoff (`bucketStart + 1h <=
+  cutoff`), never while open. Each hour then folds exactly once (all its raw samples are present),
+  the caller deletes those raw rows, and new samples always carry a current timestamp — so a closed
+  bucket can never reappear or be double-counted. Raw samples now live for the raw window **plus up
+  to one hour** (until their hour closes) — still bounded.
+- **Atomicity:** the fold's insert + delete now run in a single `db.transaction`
+  (`runRetention.ts`), so a crash between the two can't leave raw rows behind to be re-folded
+  (duplicated) on the next tick.
+- **Tests:** `tests/metricsRetention.test.ts` gained open-hour / closed-bucket / repeated-cycle
+  no-duplicate cases (pure `downsampleToHourly` + `runRetention` end-to-end against a real temp DB).
+- **Data repair (live volume):** deduped `metric_samples_hourly` to 3,336 rows **in place** —
+  `UPDATE` each group's lowest-id row with the merged aggregate (`SUM(sample_count)`, count-weighted
+  CPU/memory/disk averages, `MAX` of the maxes), then `DELETE` the group's other rows — then
+  `VACUUM`. **Lossless**: the duplicate rows were disjoint ~20s time slices, so merging reconstructs
+  the exact original hourly aggregates (`SUM(sample_count)` preserved: 585,573 before and after).
+  DB went **190M → 18.5M**, integrity ok, indexes/FK intact. Pre-fix backup at
+  `~/backups/kangops-pre-fix-2026-10-01/`; merge script at `~/backups/dedup-hourly.sql`. Gotcha:
+  `CREATE TABLE AS` drops the table's PK/FK/indexes, so the repair uses in-place UPDATE/DELETE.
+- **Deploy note:** the fix ships by rebuilding the `api` image (`docker compose build api`) and
+  `docker compose up -d api`. The 270.6M `corrupt-2026-09-22/` backup inside the volume is the
+  deliberate 2026-09-22 incident snapshot — leave it; it is separate from this bug.
+
 **Milestone 8 (Container control) — complete, 2026-09-14. Local host only, no auth yet.**
 
 The app's first genuinely Docker-mutating write surface. Everything before this milestone was
@@ -455,6 +488,8 @@ release, `v1.0.0`.**
 - `api/src/metrics/`: `retention.ts`'s `downsampleToHourly` is a pure function that folds raw
   `metric_samples` older than a cutoff into one `metric_samples_hourly` row per (host,
   container-or-null, hour) — avg/max for CPU, avg/max for memory, last-known limit/total bytes.
+  **(Superseded 2026-10-01: folding on the cutoff alone re-folded the still-open current hour on
+  every tick — a bucket now folds only once fully closed; see the Current State entry.)**
   `runRetention.ts` is the impure wrapper: runs every collector tick (cheap at homelab scale, no
   separate scheduler), default 24h raw retention / 30 days hourly retention
   (`DEFAULT_RETENTION_CONFIG`). This is what keeps `metric_samples` from growing unbounded.

@@ -15,14 +15,16 @@ export const DEFAULT_RETENTION_CONFIG: RetentionConfig = {
   hourlyRetentionMs: 30 * 24 * 60 * 60 * 1000, // 30 days of hourly rollups
 };
 
+const HOUR_MS = 60 * 60 * 1000;
+
 function entityKey(sample: MetricSample): string {
   return `${sample.hostId}:${sample.containerId ?? ""}`;
 }
 
-function truncateToHour(iso: string): string {
+function truncateToHourMs(iso: string): number {
   const d = new Date(iso);
   d.setUTCMinutes(0, 0, 0);
-  return d.toISOString();
+  return d.getTime();
 }
 
 function avg(values: number[]): number | null {
@@ -39,24 +41,33 @@ function last<T>(values: T[]): T | undefined {
   return values[values.length - 1];
 }
 
-// Pure: groups raw samples older than the cutoff into one hourly rollup row per
-// (host, container, hour). Samples at/after the cutoff are left alone (still "raw"). Callers
-// (metrics/runRetention.ts) are responsible for reading rows in, calling this, writing the
-// rollups out, and deleting the raw rows that got folded in.
+// Pure: groups raw samples into one hourly rollup row per (host, container, hour).
+//
+// A bucket is folded only once it is *fully* older than the cutoff (bucketStart + 1h <= cutoff),
+// never while it is still open. Folding partially-elapsed buckets is what previously caused
+// unbounded duplicate rows: the cutoff advances on every collector cycle (~20s), so an open hour
+// kept getting re-folded, each pass emitting another single-sample rollup row for the same
+// (entity, bucket). Waiting for the bucket to close means all of that hour's raw samples are
+// already present, so it folds into exactly one row; the caller then deletes those raw rows and
+// the bucket can never reappear (new samples always carry a current timestamp), so it can never
+// be double-counted. Net effect: raw samples live for the raw window *plus* up to one hour, until
+// their hour closes -- still bounded and cheap. Callers (metrics/runRetention.ts) are responsible
+// for reading rows in, calling this, writing the rollups out, and deleting the raw rows folded in.
 export function downsampleToHourly(samples: MetricSample[], cutoffIso: string): { hourly: NewMetricSampleHourly[]; foldedSampleIds: number[] } {
-  const eligible = samples.filter((s) => s.observedAt < cutoffIso);
-  if (eligible.length === 0) return { hourly: [], foldedSampleIds: [] };
+  const cutoffMs = new Date(cutoffIso).getTime();
 
   const groups = new Map<string, MetricSample[]>();
-  for (const sample of eligible) {
-    const bucket = truncateToHour(sample.observedAt);
-    const key = `${entityKey(sample)}:${bucket}`;
+  for (const sample of samples) {
+    const bucketStartMs = truncateToHourMs(sample.observedAt);
+    if (bucketStartMs + HOUR_MS > cutoffMs) continue; // hour not closed yet -- leave raw
+    const key = `${entityKey(sample)}:${bucketStartMs}`;
     const group = groups.get(key);
     if (group) group.push(sample);
     else groups.set(key, [sample]);
   }
 
   const hourly: NewMetricSampleHourly[] = [];
+  const foldedSampleIds: number[] = [];
   for (const group of groups.values()) {
     const first = group[0];
     if (!first) continue;
@@ -67,7 +78,7 @@ export function downsampleToHourly(samples: MetricSample[], cutoffIso: string): 
     hourly.push({
       hostId: first.hostId,
       containerId: first.containerId,
-      bucketStart: truncateToHour(first.observedAt),
+      bucketStart: new Date(truncateToHourMs(first.observedAt)).toISOString(),
       sampleCount: group.length,
       avgCpuPercent: avg(cpuValues),
       maxCpuPercent: max(cpuValues),
@@ -77,7 +88,8 @@ export function downsampleToHourly(samples: MetricSample[], cutoffIso: string): 
       avgDiskUsedBytes: diskValues.length > 0 ? Math.round(avg(diskValues) as number) : null,
       diskTotalBytes: last(group.map((s) => s.diskTotalBytes).filter((v): v is number => v !== null)) ?? null,
     });
+    for (const s of group) foldedSampleIds.push(s.id);
   }
 
-  return { hourly, foldedSampleIds: eligible.map((s) => s.id) };
+  return { hourly, foldedSampleIds };
 }
