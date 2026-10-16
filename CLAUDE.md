@@ -15,6 +15,42 @@
 
 ## Current State
 
+**Network devices page — added 2026-10-16 (outside the milestone numbering).**
+
+`#/network` (linked from the main page tagline) lists devices the ASUS router sees: online/
+offline, IP, MAC, hostname, vendor, last seen, editable alias, online count. Data path:
+`agent/network.sh` (shell+curl+jq, new `network-collector` service in the BMAX agent compose
+project) logs in to the router, fetches the client list, filters/normalises it with
+`agent/network.jq`, and POSTs online devices to `POST /api/v1/agents/:token/network` (agent token
+= auth, same pattern as Milestone 7, 30/min rate limit). API: `GET /api/v1/network/devices`,
+`PATCH /api/v1/network/devices/:mac` (`{alias: string|null}`), table `network_devices`
+(migration `0005`, mac = PK). Code: `api/src/network/`, `api/src/routes/network.ts`.
+
+- A snapshot is authoritative: devices absent from it flip `online=false` (row + `last_seen_at`
+  kept). `alias` is never in the upsert SET list, so the collector can't overwrite it.
+- Bounded: offline un-aliased rows older than 90 days are pruned on each ingest, plus a hard cap of
+  1000 un-aliased rows (random-MAC phones). Aliased rows are kept. Max 1024 devices per snapshot.
+- `GET` reports `stale: true` if no snapshot for 5 minutes (collector/router login down).
+- **No auth, and this page is a LAN inventory: never expose KangOps to the tunnel/public.**
+- Tests: `api/tests/networkRoutes.test.ts`, `api/tests/networkParse.test.ts` (runs the real
+  `network.jq` against a synthetic fixture; skipped if `jq` is absent).
+
+**ASUSWRT API gotchas / verification status.**
+- VERIFIED (unauthenticated probe of the live router, 2026-10-16): `httpd/2.0` on :80, login page
+  `/Main_Login.asp` posts form `login_authorization` = `btoa(user + ':' + pass)` to `login.cgi`.
+- NOT VERIFIED LIVE (no router credentials were available when this was built): the `asus_token`
+  Set-Cookie on login success, `appGet.cgi?hook=get_clientlist()` reply shape
+  (`{"get_clientlist":{"<MAC>":{name,nickName,ip,mac,vendor,isOnline,isGateway,...},"maclist":[],...}}`),
+  and `Logout.asp`. The script/jq were exercised only against a local mock + synthetic fixture. If
+  the first live run logs "router login failed" or "logged in but client list was empty/unparseable",
+  inspect the real reply (login response headers/body, raw client list) and adjust
+  `router_login`/`network.jq`; some firmwares return the token in the body, not a header.
+- Needs `User-Agent: asusrouter--` and a `Referer`. Repeated failed logins can lock the router for a
+  while: the collector makes one attempt per cycle with exponential backoff, reuses the session
+  token, and logs out on shutdown. Never loop login attempts by hand.
+- Deploy to BMAX is manual (copy `agent/` files, fill `ROUTER_*` in `/home/wawan/kangops-agent/.env`,
+  `docker compose up -d --build network-collector`); it is NOT deployed by this change.
+
 **Portal page — added 2026-09-18 (after Milestone 8, outside the milestone numbering).**
 
 A curated link hub for every homelab service, reachable at `#/portal` (linked from the main

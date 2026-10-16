@@ -36,6 +36,13 @@
       "when": 1789313144793,
       "tag": "0004_mysterious_talon",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792167189285,
+      "tag": "0005_lean_supernaut",
+      "breakpoints": true
     }
   ]
 }

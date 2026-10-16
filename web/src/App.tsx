@@ -943,6 +943,166 @@ function PortalPage({ onBack }: { onBack: () => void }): React.JSX.Element {
   );
 }
 
+// ---- Network devices (router client list, fed by agent/network.sh on BMAX) -----------------
+
+interface NetworkDeviceItem {
+  mac: string;
+  ip: string | null;
+  hostname: string | null;
+  vendor: string | null;
+  alias: string | null;
+  name: string | null;
+  online: boolean;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+interface NetworkDevicesResponse {
+  items: NetworkDeviceItem[];
+  onlineCount: number;
+  totalCount: number;
+  lastSnapshotAt: string | null;
+  stale: boolean;
+}
+
+function NetworkDeviceRow({ device, onSaved }: { device: NetworkDeviceItem; onSaved: () => void }): React.JSX.Element {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(device.alias ?? "");
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(): Promise<void> {
+    setError(null);
+    try {
+      const res = await fetch(`/api/v1/network/devices/${encodeURIComponent(device.mac)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias: draft.trim() === "" ? null : draft.trim() }),
+      });
+      if (!res.ok) throw new Error(`API responded with ${res.status}`);
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    }
+  }
+
+  return (
+    <tr className={device.online ? undefined : "network-offline"}>
+      <td>
+        <span className={`badge badge-${device.online ? "good" : "neutral"}`}>{device.online ? "online" : "offline"}</span>
+      </td>
+      <td>
+        {editing ? (
+          <>
+            <input
+              placeholder="alias"
+              maxLength={100}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void save();
+                if (e.key === "Escape") setEditing(false);
+              }}
+            />{" "}
+            <button type="button" onClick={() => void save()}>
+              Save
+            </button>{" "}
+            <button type="button" className="link-btn" onClick={() => setEditing(false)}>
+              cancel
+            </button>
+            {error && <span className="error"> {error}</span>}
+          </>
+        ) : (
+          <>
+            <strong>{device.alias ?? device.hostname ?? "(unnamed)"}</strong>
+            {device.alias && device.hostname && <span className="container-project"> · {device.hostname}</span>}{" "}
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                setDraft(device.alias ?? "");
+                setEditing(true);
+              }}
+            >
+              {device.alias ? "edit alias" : "set alias"}
+            </button>
+          </>
+        )}
+      </td>
+      <td>{device.ip ?? "—"}</td>
+      <td>
+        <code>{device.mac}</code>
+      </td>
+      <td>{device.vendor ?? "—"}</td>
+      <td title={device.lastSeenAt}>{new Date(device.lastSeenAt).toLocaleString()}</td>
+    </tr>
+  );
+}
+
+function NetworkPage({ onBack }: { onBack: () => void }): React.JSX.Element {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const devices = useJsonFetch<NetworkDevicesResponse>("/api/v1/network/devices", [refreshKey]);
+
+  // Auto-refresh so the online count tracks the collector's cycle without a manual reload.
+  useEffect(() => {
+    const timer = window.setInterval(() => setRefreshKey((k) => k + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <main className="shell">
+      <div className="portal-header">
+        <button type="button" className="link-btn" onClick={onBack}>
+          ← KangOps
+        </button>
+        <h1>Network devices</h1>
+        {devices.status === "ready" && (
+          <span className={`badge badge-${devices.data.stale ? "bad" : "good"}`}>
+            {devices.data.onlineCount} online / {devices.data.totalCount} known
+          </span>
+        )}
+      </div>
+      <p className="tagline">
+        Clients seen by the router, collected from BMAX (<code>agent/network.sh</code>). This is a LAN inventory and
+        KangOps has no auth yet — do not expose this page through a tunnel.
+      </p>
+
+      {devices.status === "loading" && <p>Loading devices…</p>}
+      {devices.status === "error" && <p className="error">Could not reach the API: {devices.message}</p>}
+      {devices.status === "ready" && (
+        <>
+          {devices.data.stale && (
+            <p className="error">
+              {devices.data.lastSnapshotAt
+                ? `No snapshot since ${new Date(devices.data.lastSnapshotAt).toLocaleString()} — online/offline flags may be outdated.`
+                : "No snapshot received yet — is the network collector deployed and ROUTER_* set?"}
+            </p>
+          )}
+          {devices.data.items.length > 0 && (
+            <table className="network-table">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Name</th>
+                  <th>IP</th>
+                  <th>MAC</th>
+                  <th>Vendor</th>
+                  <th>Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devices.data.items.map((device) => (
+                  <NetworkDeviceRow key={device.mac} device={device} onSaved={() => setRefreshKey((k) => k + 1)} />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </main>
+  );
+}
+
 export function App(): React.JSX.Element {
   // Hash routing ("#/portal"): nginx already has the SPA fallback configured, and this keeps
   // the app dependency-free (no react-router for one extra page).
@@ -956,6 +1116,16 @@ export function App(): React.JSX.Element {
   if (route === "#/portal") {
     return (
       <PortalPage
+        onBack={() => {
+          window.location.hash = "";
+        }}
+      />
+    );
+  }
+
+  if (route === "#/network") {
+    return (
+      <NetworkPage
         onBack={() => {
           window.location.hash = "";
         }}
@@ -986,7 +1156,7 @@ function MainPage(): React.JSX.Element {
       <h1>KangOps</h1>
       <p className="tagline">
         Local-first Docker observability — Milestone 7: multi-host agents. ·{" "}
-        <a href="#/portal">Portal</a>
+        <a href="#/portal">Portal</a> · <a href="#/network">Network</a>
       </p>
 
       {summary.status === "loading" && <p>Loading summary…</p>}

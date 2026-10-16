@@ -9,8 +9,8 @@ FROM alpine:3.21
 # exact pin here would turn the next routine security bump into a broken rebuild.
 RUN apk add --no-cache curl jq
 
-COPY agent.sh /usr/local/bin/agent.sh
-RUN chmod 0555 /usr/local/bin/agent.sh
+COPY agent.sh network.sh network.jq /usr/local/bin/
+RUN chmod 0555 /usr/local/bin/agent.sh /usr/local/bin/network.sh
 
 # Runs as nobody: the agent reads /host/proc and a read-only bind mount, and talks HTTP to the
 # socket proxy. It needs no privileges at all, and never writes to disk.

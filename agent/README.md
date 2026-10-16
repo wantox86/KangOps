@@ -86,3 +86,25 @@ curl -s http://localhost:8085/api/v1/hosts  | jq   # the host appears with live 
   collector going down. A stale agent's last-known metrics are deliberately *not* scored.
 - `docker compose logs agent` is quiet on success and logs one line per failed report. The token
   is never logged, including in curl's own error output.
+
+## Network collector (`network.sh`, router client list)
+
+A second service in the same Compose project (`network-collector`, same image, own container).
+Every `NETWORK_INTERVAL_SECONDS` (default 60) it logs in to the ASUS router (ASUSWRT) web API,
+reads `appGet.cgi?hook=get_clientlist()`, normalises it with `network.jq`, and POSTs the **online**
+devices to `POST /api/v1/agents/:token/network` (same agent token as `agent.sh`). Read-only against
+the router, outbound only, `mem_limit: 32m`.
+
+Setup: add to `.env` (mode 600, never committed) `ROUTER_URL`, `ROUTER_USER`, `ROUTER_PASS`
+(see `.env.example`), copy `network.sh`, `network.jq`, the updated `Dockerfile` and
+`docker-compose.yml`, then `docker compose up -d --build network-collector`. This does not touch
+the existing `agent` service. Note `agent` also loads `.env`, so it receives ROUTER_PASS in its
+environment even though it never reads it.
+
+Login hygiene: one login attempt per cycle, session token reused across cycles, exponential
+backoff (up to 1h) on consecutive failures, logout on shutdown. Do not loop logins by hand:
+repeated bad logins can lock the router's admin UI temporarily. Empty parse results are skipped
+(they would flip every device offline).
+
+Parsing is tested against a synthetic fixture (`fixtures/asus-clientlist.json`, made-up MACs) by
+`api/tests/networkParse.test.ts`.

@@ -77,3 +77,28 @@ services:
       options:
         max-size: "1m"
         max-file: "2"
+
+  # Network devices collector. Same image as `agent` (it ships network.sh + network.jq), its own
+  # container: logs into the ASUS router, reads the client list, POSTs online devices to KangOps.
+  # Outbound only -- no published port. Removing this service never affects `agent` above.
+  # Needs ROUTER_USER / ROUTER_PASS in .env (see .env.example); without them it exits with a
+  # clear message and restarts, so leave it undeployed until they are set.
+  network-collector:
+    build: .
+    container_name: kangops_network_collector
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/usr/local/bin/network.sh"]
+    env_file: .env
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # curl + jq between 60s sleeps; the ceiling is for the misbehaving case, not typical use.
+    mem_limit: 32m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "2"
