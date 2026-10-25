@@ -35,14 +35,17 @@ describe("container control routes", () => {
   let testDb: TestDb;
   let app: FastifyInstance;
   let adapter: DockerControlAdapter;
+  // Keep the vi.fn() handles separately so assertions don't read unbound methods off the adapter.
+  let mocks: Record<keyof DockerControlAdapter, ReturnType<typeof vi.fn>>;
 
   beforeEach(() => {
     testDb = createTestDb();
-    adapter = {
+    mocks = {
       startContainer: vi.fn().mockResolvedValue(undefined),
       stopContainer: vi.fn().mockResolvedValue(undefined),
       restartContainer: vi.fn().mockResolvedValue(undefined),
     };
+    adapter = mocks;
   });
 
   afterEach(async () => {
@@ -71,7 +74,7 @@ describe("container control routes", () => {
 
     const response = await app.inject({ method: "POST", url: "/api/v1/containers/c-remote/restart" });
     expect(response.statusCode).toBe(400);
-    expect(adapter.restartContainer).not.toHaveBeenCalled();
+    expect(mocks.restartContainer).not.toHaveBeenCalled();
   });
 
   it.each(["start", "stop", "restart"] as const)("calls the adapter's %s method and records a success audit event", async (action) => {
@@ -83,7 +86,7 @@ describe("container control routes", () => {
     expect(response.json()).toMatchObject({ ok: true, action, dockerId: "c1" });
 
     const methodName = `${action}Container` as const;
-    expect(adapter[methodName]).toHaveBeenCalledWith("c1");
+    expect(mocks[methodName]).toHaveBeenCalledWith("c1");
 
     const rows = testDb.db.select().from(events).all();
     const auditRow = rows.find((r) => r.source === "container_control");
