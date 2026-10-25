@@ -399,3 +399,28 @@ body {
 .portal-card-urls a:hover {
   text-decoration: underline;
 }
+
+/* ── Network devices page ────────────────────────────────────────────────── */
+
+.network-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.network-table th,
+.network-table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #232b33;
+}
+
+.network-table th {
+  color: #9aa7b1;
+  font-weight: 600;
+}
+
+.network-offline {
+  opacity: 0.6;
+}

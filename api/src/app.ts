@@ -16,6 +16,7 @@ import { registerDependencyRoutes } from "./routes/dependencies.js";
 import { registerAgentRoutes } from "./routes/agents.js";
 import { registerContainerControlRoutes } from "./routes/containerControl.js";
 import { registerPortalRoutes } from "./routes/portal.js";
+import { registerNetworkRoutes } from "./routes/network.js";
 import type { DockerControlAdapter } from "./docker/types.js";
 
 export interface BuildAppOptions {
@@ -51,6 +52,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   registerAgentRoutes(app, options.db);
   registerContainerControlRoutes(app, options.db, options.controlAdapter);
   registerPortalRoutes(app);
+  registerNetworkRoutes(app, options.db);
 
   return app;
 }

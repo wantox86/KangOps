@@ -308,6 +308,31 @@ export const agents = sqliteTable(
   }),
 );
 
+// Network devices seen by the router (fed by the BMAX network collector, agent/network.sh). mac
+// is the identity: IPs change with DHCP, hostnames are often blank or generic. A device is never
+// deleted by a snapshot that omits it -- it is flipped offline with last_seen_at preserved.
+// alias is the only column the collector can never write (user-set via PATCH), so a router-side
+// rename or a re-ingest cannot clobber it. Bounded by network/repo.ts pruning (old offline
+// rows without an alias are dropped), because random-MAC phones would otherwise grow it forever.
+export const networkDevices = sqliteTable(
+  "network_devices",
+  {
+    mac: text("mac").primaryKey(),
+    ip: text("ip"),
+    hostname: text("hostname"),
+    vendor: text("vendor"),
+    online: integer("online", { mode: "boolean" }).notNull().default(false),
+    firstSeenAt: text("first_seen_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    alias: text("alias"),
+  },
+  (table) => ({
+    lastSeenIdx: index("network_devices_last_seen_idx").on(table.lastSeenAt),
+  }),
+);
+
+export type NetworkDevice = typeof networkDevices.$inferSelect;
+
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 
