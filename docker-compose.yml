@@ -68,6 +68,10 @@ services:
     env_file: .env
     environment:
       DATABASE_PATH: /data/kangops.sqlite
+      # The named volume lives on a disk image that can lose an in-flight page on an unclean
+      # host/VM shutdown (a 2026-09-22 incident left one leaf page of metric_samples_hourly
+      # zeroed). FULL fsyncs the WAL on every commit -- slower writes, no torn pages.
+      SQLITE_SYNCHRONOUS: full
       DOCKER_MODE: socket
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       # Opt-in per config.ts's default -- CLAUDE.md/.env documents the risk (no auth yet) before

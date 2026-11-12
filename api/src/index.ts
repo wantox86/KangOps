@@ -15,9 +15,9 @@ async function main(): Promise<void> {
   // Migrations must complete before /readyz can report ready -- run them synchronously here,
   // not as a fire-and-forget, so a broken migration fails the container's startup/healthcheck
   // loudly instead of leaving the API up but silently unable to serve real data.
-  runMigrations(config.DATABASE_PATH);
+  runMigrations(config.DATABASE_PATH, config.SQLITE_SYNCHRONOUS);
 
-  const { db, sqlite } = createDb(config.DATABASE_PATH);
+  const { db, sqlite } = createDb(config.DATABASE_PATH, { synchronous: config.SQLITE_SYNCHRONOUS });
 
   // Milestone 8: only wired up when both opted in (CONTAINER_CONTROL_ENABLED=true) and talking
   // to a real Docker endpoint -- fixture mode has nothing real to control.

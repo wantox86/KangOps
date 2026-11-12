@@ -8,6 +8,12 @@ describe("loadConfig", () => {
     expect(config.HOST).toBe("0.0.0.0");
     expect(config.NODE_ENV).toBe("development");
     expect(config.DATABASE_PATH).toBe("./data/kangops.sqlite");
+    expect(config.SQLITE_SYNCHRONOUS).toBe("normal");
+  });
+
+  it("accepts a SQLITE_SYNCHRONOUS override and rejects unknown modes", () => {
+    expect(loadConfig({ SQLITE_SYNCHRONOUS: "full" }).SQLITE_SYNCHRONOUS).toBe("full");
+    expect(() => loadConfig({ SQLITE_SYNCHRONOUS: "turbo" })).toThrowError(/Invalid configuration/);
   });
 
   it("coerces PORT from a string env var", () => {
