@@ -9,6 +9,11 @@ const EnvSchema = z.object({
   // Persistent SQLite file path -- mounted as a volume in Compose. Defaults to a repo-local
   // path for `npm run dev`, overridden in docker-compose.yml to point at the named volume.
   DATABASE_PATH: z.string().default("./data/kangops.sqlite"),
+  // SQLite commit durability. NORMAL is right for a local SSD; FULL fsyncs the WAL on every
+  // commit and is the safe choice when the DB file sits on removable/USB storage or a VM disk
+  // image that can lose an in-flight page on an unclean shutdown. Deploy-time policy, not a
+  // per-request concern, so it lives here with the other boot-time settings.
+  SQLITE_SYNCHRONOUS: z.enum(["off", "normal", "full", "extra"]).default("normal"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
   // Milestone 2: which Docker read adapter to use. "fixture" replays recorded sample data (no

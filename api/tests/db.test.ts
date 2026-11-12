@@ -37,6 +37,26 @@ describe("migrations + schema", () => {
     const result = testDb.sqlite.pragma("journal_mode", { simple: true });
     expect(result).toBe("wal");
   });
+
+  // Durability is a deploy-time knob (see config.SQLITE_SYNCHRONOUS): default NORMAL, FULL for
+  // storage that can lose an in-flight page on an unclean shutdown. Both must land on the real
+  // connection, since synchronous is per-connection and is NOT persisted in the file header.
+  it("defaults to synchronous=NORMAL", () => {
+    expect(testDb.sqlite.pragma("synchronous", { simple: true })).toBe(1);
+  });
+
+  it("applies synchronous=FULL when asked", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kangops-sync-"));
+    const path = join(dir, "test.sqlite");
+    const { sqlite } = createDb(path, { synchronous: "full" });
+    try {
+      // better-sqlite3 reports the numeric form: 2 = FULL.
+      expect(sqlite.pragma("synchronous", { simple: true })).toBe(2);
+    } finally {
+      sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // Milestone 5: "test upgrades/migrations, database persistence" -- exercises the actual startup
