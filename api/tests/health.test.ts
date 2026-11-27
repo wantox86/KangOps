@@ -28,4 +28,35 @@ describe("health routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: "ok" });
   });
+
+  it("suppresses info-level request logs on /healthz and /readyz when global logLevel is info", async () => {
+    const infoApp = buildApp({ sqlite: testDb.sqlite, db: testDb.db, logLevel: "info" });
+    try {
+      const seenLevels = new Map<string, string>();
+      infoApp.addHook("onRequest", async (request) => {
+        seenLevels.set(request.url, request.log.level);
+      });
+
+      const healthz = await infoApp.inject({ method: "GET", url: "/healthz" });
+      const readyz = await infoApp.inject({ method: "GET", url: "/readyz" });
+      expect(healthz.statusCode).toBe(200);
+      expect(readyz.statusCode).toBe(200);
+      expect(seenLevels.get("/healthz")).toBe("warn");
+      expect(seenLevels.get("/readyz")).toBe("warn");
+    } finally {
+      await infoApp.close();
+    }
+  });
+
+  it("keeps silent logLevel on /healthz and /readyz when global logLevel is silent", async () => {
+    const seenLevels = new Map<string, string>();
+    app.addHook("onRequest", async (request) => {
+      seenLevels.set(request.url, request.log.level);
+    });
+
+    await app.inject({ method: "GET", url: "/healthz" });
+    await app.inject({ method: "GET", url: "/readyz" });
+    expect(seenLevels.get("/healthz")).toBe("silent");
+    expect(seenLevels.get("/readyz")).toBe("silent");
+  });
 });

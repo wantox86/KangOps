@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
-import type { DbClient } from "../db/client.js";
+import type { DbClient, DbExecutor } from "../db/client.js";
 import { agents, hosts, type Agent, type NewAgent } from "../db/schema.js";
 import { DEFAULT_AGENT_INTERVAL_SECONDS } from "./types.js";
 
@@ -86,6 +86,6 @@ export function deleteAgent(db: DbClient, id: number): void {
   db.delete(agents).where(eq(agents.id, id)).run();
 }
 
-export function recordAgentReport(db: DbClient, id: number, agentVersion: string, nowIso: string): void {
+export function recordAgentReport(db: DbExecutor, id: number, agentVersion: string, nowIso: string): void {
   db.update(agents).set({ lastReportAt: nowIso, agentVersion }).where(eq(agents.id, id)).run();
 }

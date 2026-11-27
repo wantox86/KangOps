@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, type TestDb } from "../src/test-helpers/db.js";
 import { startCollector, type Collector } from "../src/collector/loop.js";
 import { createFixtureAdapter } from "../src/docker/fixtureAdapter.js";
-import { healthConditions, metricSamples } from "../src/db/schema.js";
+import { healthConditions, hosts, metricSamples } from "../src/db/schema.js";
+import { runHealthCycle } from "../src/health/cycle.js";
 
 const silentLogger = { warn: () => {}, error: () => {}, info: () => {} } as unknown as import("fastify").FastifyBaseLogger;
 
@@ -97,5 +98,37 @@ describe("collector loop's health/metrics cycle", () => {
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.active === false)).toBe(true);
     expect(rows.some((r) => r.resolvedAt !== null)).toBe(true);
+  });
+
+  it("persists metric samples, health conditions, and host lastSeenAt in one atomic transaction", async () => {
+    const initialTs = "2026-01-01T00:00:00.000Z";
+    testDb.db
+      .insert(hosts)
+      .values({ id: "local", name: "test-host", status: "reachable", firstSeenAt: initialTs, lastSeenAt: initialTs })
+      .run();
+
+    // Force the final hosts.lastSeenAt update inside the health cycle transaction to fail; if
+    // metric_samples were still inserted before the transaction, they would leak on failure.
+    testDb.sqlite.exec(`
+      CREATE TRIGGER fail_host_touch BEFORE UPDATE ON hosts
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated health cycle failure');
+      END;
+    `);
+
+    await expect(
+      runHealthCycle({
+        db: testDb.db,
+        adapter: createFixtureAdapter(),
+        hostId: "local",
+        hostStatus: "reachable",
+        nowIso: "2026-01-01T00:01:00.000Z",
+        diskPath: "/",
+        logger: silentLogger,
+      }),
+    ).rejects.toThrow("simulated health cycle failure");
+
+    expect(testDb.db.select().from(metricSamples).all()).toHaveLength(0);
+    expect(testDb.db.select().from(hosts).where(eq(hosts.id, "local")).all()[0]?.lastSeenAt).toBe(initialTs);
   });
 });

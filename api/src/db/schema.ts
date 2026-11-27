@@ -108,6 +108,7 @@ export const metricSamples = sqliteTable(
   (table) => ({
     hostObservedIdx: index("metric_samples_host_observed_idx").on(table.hostId, table.observedAt),
     containerObservedIdx: index("metric_samples_container_observed_idx").on(table.containerId, table.observedAt),
+    observedAtIdx: index("metric_samples_observed_at_idx").on(table.observedAt),
   }),
 );
 

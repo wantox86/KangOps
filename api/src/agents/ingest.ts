@@ -40,89 +40,91 @@ function toNormalized(reported: ReportedContainer): NormalizedContainer {
 export function ingestAgentReport(db: DbClient, agent: Agent, report: AgentReport, nowIso: string): IngestResult {
   const hostId = agent.hostId;
 
-  const existingHost = db.select().from(hosts).where(eq(hosts.id, hostId)).all()[0];
-  const cameOnline = existingHost?.status !== "reachable";
+  return db.transaction((tx) => {
+    const existingHost = tx.select().from(hosts).where(eq(hosts.id, hostId)).all()[0];
+    const cameOnline = existingHost?.status !== "reachable";
 
-  db.update(hosts)
-    .set({
-      status: "reachable",
-      lastSeenAt: nowIso,
-      // Host-reported facts (kernel, uptime, agent version) belong in the free-form metadata
-      // column, not in new typed columns -- they're informational only and vary by agent.
-      metadataJson: JSON.stringify({
-        kind: "agent",
-        hostname: report.hostname ?? null,
-        kernel: report.kernel ?? null,
-        uptimeSeconds: report.uptimeSeconds ?? null,
-        agentVersion: report.agentVersion,
-      }),
-    })
-    .where(eq(hosts.id, hostId))
-    .run();
+    tx.update(hosts)
+      .set({
+        status: "reachable",
+        lastSeenAt: nowIso,
+        // Host-reported facts (kernel, uptime, agent version) belong in the free-form metadata
+        // column, not in new typed columns -- they're informational only and vary by agent.
+        metadataJson: JSON.stringify({
+          kind: "agent",
+          hostname: report.hostname ?? null,
+          kernel: report.kernel ?? null,
+          uptimeSeconds: report.uptimeSeconds ?? null,
+          agentVersion: report.agentVersion,
+        }),
+      })
+      .where(eq(hosts.id, hostId))
+      .run();
 
-  db.insert(metricSamples)
-    .values({
-      hostId,
-      containerId: null,
-      observedAt: nowIso,
-      cpuPercent: report.host.cpuPercent ?? null,
-      memoryBytes: report.host.memoryUsedBytes ?? null,
-      memoryLimitBytes: report.host.memoryTotalBytes ?? null,
-      diskUsedBytes: report.host.diskUsedBytes ?? null,
-      diskTotalBytes: report.host.diskTotalBytes ?? null,
-    })
-    .run();
-
-  let containersSynced = 0;
-  // Undefined means "this agent has no Docker visibility at all" -- leave any previously known
-  // containers untouched rather than marking them removed, which would fabricate a removal event
-  // for containers that are probably still running (the agent just stopped being able to see
-  // them). An empty array is a real observation of zero containers and does mark them removed.
-  if (report.containers) {
-    const existingRows = db.select().from(containers).where(eq(containers.hostId, hostId)).all();
-    const existingById = new Map(existingRows.map((row) => [row.dockerId, row]));
-    const reportedIds = new Set(report.containers.map((c) => c.dockerId));
-
-    for (const reported of report.containers) {
-      const { upsert, events: newEvents } = diffContainer(toNormalized(reported), existingById.get(reported.dockerId), nowIso);
-      upsert.hostId = hostId;
-      db.insert(containers).values(upsert).onConflictDoUpdate({ target: containers.dockerId, set: upsert }).run();
-      for (const event of newEvents) {
-        db.insert(events).values({ ...event, hostId, source: "agent" }).run();
-      }
-      containersSynced++;
-    }
-
-    for (const row of existingRows) {
-      if (!reportedIds.has(row.dockerId) && row.currentState !== "removed") {
-        const { upsert, events: newEvents } = diffMissing(row, nowIso);
-        db.insert(containers).values(upsert).onConflictDoUpdate({ target: containers.dockerId, set: upsert }).run();
-        for (const event of newEvents) {
-          db.insert(events).values({ ...event, hostId, source: "agent" }).run();
-        }
-      }
-    }
-  }
-
-  // One event per online transition, not one per report -- the events table is a timeline a human
-  // reads, and a 30s heartbeat would drown it (same reasoning as backups/gather.ts not writing a
-  // run row every cycle).
-  if (cameOnline) {
-    db.insert(events)
+    tx.insert(metricSamples)
       .values({
         hostId,
         containerId: null,
-        occurredAt: nowIso,
-        source: "agent",
-        type: "agent_online",
-        severity: "info",
-        summary: `Agent "${agent.name}" reported in (version ${report.agentVersion})`,
-        metadataJson: null,
+        observedAt: nowIso,
+        cpuPercent: report.host.cpuPercent ?? null,
+        memoryBytes: report.host.memoryUsedBytes ?? null,
+        memoryLimitBytes: report.host.memoryTotalBytes ?? null,
+        diskUsedBytes: report.host.diskUsedBytes ?? null,
+        diskTotalBytes: report.host.diskTotalBytes ?? null,
       })
       .run();
-  }
 
-  recordAgentReport(db, agent.id, report.agentVersion, nowIso);
+    let containersSynced = 0;
+    // Undefined means "this agent has no Docker visibility at all" -- leave any previously known
+    // containers untouched rather than marking them removed, which would fabricate a removal event
+    // for containers that are probably still running (the agent just stopped being able to see
+    // them). An empty array is a real observation of zero containers and does mark them removed.
+    if (report.containers) {
+      const existingRows = tx.select().from(containers).where(eq(containers.hostId, hostId)).all();
+      const existingById = new Map(existingRows.map((row) => [row.dockerId, row]));
+      const reportedIds = new Set(report.containers.map((c) => c.dockerId));
 
-  return { containersSynced, cameOnline };
+      for (const reported of report.containers) {
+        const { upsert, events: newEvents } = diffContainer(toNormalized(reported), existingById.get(reported.dockerId), nowIso);
+        upsert.hostId = hostId;
+        tx.insert(containers).values(upsert).onConflictDoUpdate({ target: containers.dockerId, set: upsert }).run();
+        for (const event of newEvents) {
+          tx.insert(events).values({ ...event, hostId, source: "agent" }).run();
+        }
+        containersSynced++;
+      }
+
+      for (const row of existingRows) {
+        if (!reportedIds.has(row.dockerId) && row.currentState !== "removed") {
+          const { upsert, events: newEvents } = diffMissing(row, nowIso);
+          tx.insert(containers).values(upsert).onConflictDoUpdate({ target: containers.dockerId, set: upsert }).run();
+          for (const event of newEvents) {
+            tx.insert(events).values({ ...event, hostId, source: "agent" }).run();
+          }
+        }
+      }
+    }
+
+    // One event per online transition, not one per report -- the events table is a timeline a human
+    // reads, and a 30s heartbeat would drown it (same reasoning as backups/gather.ts not writing a
+    // run row every cycle).
+    if (cameOnline) {
+      tx.insert(events)
+        .values({
+          hostId,
+          containerId: null,
+          occurredAt: nowIso,
+          source: "agent",
+          type: "agent_online",
+          severity: "info",
+          summary: `Agent "${agent.name}" reported in (version ${report.agentVersion})`,
+          metadataJson: null,
+        })
+        .run();
+    }
+
+    recordAgentReport(tx, agent.id, report.agentVersion, nowIso);
+
+    return { containersSynced, cameOnline };
+  });
 }

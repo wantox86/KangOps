@@ -190,5 +190,49 @@ describe("Milestone 7 agent routes", () => {
       const list = await app.inject({ method: "GET", url: "/api/v1/agents" });
       expect(list.json<{ items: Array<{ status: string; agentVersion: string }> }>().items[0]).toMatchObject({ status: "reporting", agentVersion: "1.0.0" });
     });
+
+    it("rolls back all agent ingest writes atomically if recordAgentReport fails", async () => {
+      const created = await createAgent();
+      testDb.sqlite.exec(`
+        CREATE TRIGGER fail_agent_update BEFORE UPDATE ON agents
+        BEGIN
+          SELECT RAISE(ABORT, 'simulated agent update failure');
+        END;
+      `);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/agents/${created.token}/report`,
+        payload: REPORT,
+      });
+      expect(response.statusCode).toBe(500);
+
+      // Nothing from the failed report (host status, metric sample, container, event) may leak.
+      expect(testDb.db.select().from(hosts).where(eq(hosts.id, created.hostId)).all()[0]?.status).toBe("unknown");
+      expect(testDb.db.select().from(metricSamples).all()).toHaveLength(0);
+      expect(testDb.db.select().from(containers).all()).toHaveLength(0);
+      expect(testDb.db.select().from(events).all()).toHaveLength(0);
+    });
+
+    it("uses warn logLevel for routine agent report requests when global logLevel is info", async () => {
+      const infoApp = buildApp({ sqlite: testDb.sqlite, db: testDb.db, logLevel: "info" });
+      try {
+        const created = await createAgent();
+        let reportLogLevel: string | undefined;
+        infoApp.addHook("onRequest", async (request) => {
+          reportLogLevel = request.log.level;
+        });
+
+        const response = await infoApp.inject({
+          method: "POST",
+          url: `/api/v1/agents/${created.token}/report`,
+          payload: REPORT,
+        });
+        expect(response.statusCode).toBe(202);
+        expect(reportLogLevel).toBe("warn");
+      } finally {
+        await infoApp.close();
+      }
+    });
   });
 });

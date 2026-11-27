@@ -1,11 +1,11 @@
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, inArray } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import { evaluateAgentHealth, gatherAgentSnapshots } from "../agents/health.js";
 import { dispatchAlerts } from "../alerts/notifier.js";
 import { gatherBackupStatuses } from "../backups/gather.js";
 import { evaluateBackupHealth } from "../backups/freshness.js";
 import type { DbClient } from "../db/client.js";
-import { containers as containersTable, events, healthConditions, hosts, metricSamples } from "../db/schema.js";
+import { containers as containersTable, events, healthConditions, hosts, metricSamples, type NewMetricSample } from "../db/schema.js";
 import type { DockerReadAdapter } from "../docker/types.js";
 import { collectHostMetrics } from "../host/metrics.js";
 import { evaluateHealth, summarizeConditions } from "./engine.js";
@@ -52,8 +52,8 @@ export async function runHealthCycle(options: HealthCycleOptions): Promise<Healt
   const thresholds = getThresholds(db);
 
   const hostMetrics = await collectHostMetrics(200, diskPath);
-  db.insert(metricSamples)
-    .values({
+  const pendingSamples: NewMetricSample[] = [
+    {
       hostId,
       containerId: null,
       observedAt: nowIso,
@@ -62,8 +62,8 @@ export async function runHealthCycle(options: HealthCycleOptions): Promise<Healt
       memoryLimitBytes: hostMetrics.memoryTotalBytes,
       diskUsedBytes: hostMetrics.diskUsedBytes,
       diskTotalBytes: hostMetrics.diskTotalBytes,
-    })
-    .run();
+    },
+  ];
 
   const currentContainers = db.select().from(containersTable).where(eq(containersTable.hostId, hostId)).all();
   const activeContainers = currentContainers.filter((c) => c.currentState !== "removed");
@@ -81,18 +81,16 @@ export async function runHealthCycle(options: HealthCycleOptions): Promise<Healt
       if (stats) {
         cpuPercent = stats.cpuPercent;
         memoryPercent = percent(stats.memoryBytes, stats.memoryLimitBytes);
-        db.insert(metricSamples)
-          .values({
-            hostId,
-            containerId: container.dockerId,
-            observedAt: nowIso,
-            cpuPercent: stats.cpuPercent,
-            memoryBytes: stats.memoryBytes,
-            memoryLimitBytes: stats.memoryLimitBytes,
-            diskUsedBytes: null,
-            diskTotalBytes: null,
-          })
-          .run();
+        pendingSamples.push({
+          hostId,
+          containerId: container.dockerId,
+          observedAt: nowIso,
+          cpuPercent: stats.cpuPercent,
+          memoryBytes: stats.memoryBytes,
+          memoryLimitBytes: stats.memoryLimitBytes,
+          diskUsedBytes: null,
+          diskTotalBytes: null,
+        });
       }
     }
 
@@ -147,20 +145,30 @@ export async function runHealthCycle(options: HealthCycleOptions): Promise<Healt
 
   const allConditions = [...hostResult.conditions, ...backupConditions, ...agentConditions];
 
-  const existingActive = db.select().from(healthConditions).where(eq(healthConditions.active, true)).all();
-  const { toInsert, toResolveIds } = reconcileConditions(allConditions, existingActive, nowIso);
+  // Persist all metric samples, condition transitions, and host lastSeenAt in one synchronous
+  // transaction to avoid dozens of separate SQLite autocommit WAL fsyncs per cycle.
+  const toInsert = db.transaction((tx) => {
+    if (pendingSamples.length > 0) {
+      tx.insert(metricSamples).values(pendingSamples).run();
+    }
 
-  if (toInsert.length > 0) {
-    db.insert(healthConditions).values(toInsert).run();
-  }
-  for (const id of toResolveIds) {
-    db.update(healthConditions).set({ active: false, resolvedAt: nowIso }).where(eq(healthConditions.id, id)).run();
-  }
+    const existingActive = tx.select().from(healthConditions).where(eq(healthConditions.active, true)).all();
+    const { toInsert: newlyOpened, toResolveIds } = reconcileConditions(allConditions, existingActive, nowIso);
 
-  // Keep the hosts row's collector-observed status separate from health-condition penalties --
-  // this write is defensive (loop.ts already sets it) so runHealthCycle stays correct if ever
-  // called standalone (e.g. from a test) without the surrounding collector cycle.
-  db.update(hosts).set({ lastSeenAt: nowIso }).where(eq(hosts.id, hostId)).run();
+    if (newlyOpened.length > 0) {
+      tx.insert(healthConditions).values(newlyOpened).run();
+    }
+    if (toResolveIds.length > 0) {
+      tx.update(healthConditions).set({ active: false, resolvedAt: nowIso }).where(inArray(healthConditions.id, toResolveIds)).run();
+    }
+
+    // Keep the hosts row's collector-observed status separate from health-condition penalties --
+    // this write is defensive (loop.ts already sets it) so runHealthCycle stays correct if ever
+    // called standalone (e.g. from a test) without the surrounding collector cycle.
+    tx.update(hosts).set({ lastSeenAt: nowIso }).where(eq(hosts.id, hostId)).run();
+
+    return newlyOpened;
+  });
 
   // Webhook alerts fire only for conditions newly opened *this cycle* (toInsert) -- an already-
   // active condition never re-alerts just because it's still active, and notifier.ts's own

@@ -122,4 +122,36 @@ describe("collector loop", () => {
     const host = testDb.db.select().from(hosts).where(eq(hosts.id, "local")).all()[0];
     expect(host?.status).toBe("unreachable");
   }, 2000);
+
+  it("rolls back the entire container sync atomically if a DB write fails mid-cycle", async () => {
+    // Abort on the 2nd discovery event insert; if container upserts + events weren't wrapped in
+    // one transaction, the first container/event would already be committed before the failure.
+    testDb.sqlite.exec(`
+      CREATE TRIGGER fail_second_event BEFORE INSERT ON events
+      WHEN NEW.type = 'container_discovered' AND (SELECT COUNT(*) FROM events WHERE type = 'container_discovered') >= 1
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated mid-sync failure');
+      END;
+    `);
+
+    collector = startCollector({
+      db: testDb.db,
+      adapter: createFixtureAdapter(),
+      hostId: "local",
+      hostName: "test-host",
+      intervalMs: 60_000,
+      timeoutMs: 1000,
+      retries: 0,
+      logger: silentLogger,
+    });
+
+    await collector.runOnce();
+
+    // The sync transaction rolled back completely (no partial containers or discovery events),
+    // and the catch block recorded the collector_error + unreachable host status instead.
+    expect(testDb.db.select().from(containers).all()).toHaveLength(0);
+    expect(testDb.db.select().from(events).where(eq(events.type, "container_discovered")).all()).toHaveLength(0);
+    expect(testDb.db.select().from(events).where(eq(events.type, "collector_error")).all()).toHaveLength(1);
+    expect(testDb.db.select().from(hosts).where(eq(hosts.id, "local")).all()[0]?.status).toBe("unreachable");
+  });
 });

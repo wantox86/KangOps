@@ -1,0 +1,1 @@
+CREATE INDEX `metric_samples_observed_at_idx` ON `metric_samples` (`observed_at`);
