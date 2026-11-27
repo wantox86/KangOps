@@ -120,7 +120,14 @@ export function registerAgentRoutes(app: FastifyInstance, db: DbClient): void {
     return reply.code(204).send();
   });
 
-  app.post<{ Params: { token: string } }>("/api/v1/agents/:token/report", async (request, reply) => {
+  // Suppress routine 202 request/response logs from 30s agent reports while keeping warn/error
+  // logs visible (and without overriding a quieter global level like "silent" in tests).
+  const quietReportOptions =
+    app.log.level === "trace" || app.log.level === "debug" || app.log.level === "info"
+      ? { logLevel: "warn" as const }
+      : {};
+
+  app.post<{ Params: { token: string } }>("/api/v1/agents/:token/report", quietReportOptions, async (request, reply) => {
     const { token } = request.params;
 
     if (!reportLimiter.allow(token)) {

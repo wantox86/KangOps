@@ -5,6 +5,8 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
 
 export type DbClient = ReturnType<typeof drizzle<typeof schema>>;
+export type DbTx = Parameters<Parameters<DbClient["transaction"]>[0]>[0];
+export type DbExecutor = DbClient | DbTx;
 
 export function createDb(databasePath: string): { db: DbClient; sqlite: Database.Database } {
   // better-sqlite3 doesn't create parent directories -- Compose mounts a volume dir, but

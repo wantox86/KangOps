@@ -36,6 +36,13 @@
       "when": 1789313144793,
       "tag": "0004_mysterious_talon",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795739078403,
+      "tag": "0005_short_snowbird",
+      "breakpoints": true
     }
   ]
 }

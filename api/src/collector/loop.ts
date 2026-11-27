@@ -87,30 +87,32 @@ export function startCollector(options: CollectorOptions): Collector {
     try {
       const observed = await withRetry(() => withTimeout(adapter.listContainers(), timeoutMs, "listContainers"), retries, logger);
 
-      const existingRows = db.select().from(containers).where(eq(containers.hostId, hostId)).all();
-      const existingById = new Map(existingRows.map((row) => [row.dockerId, row]));
-      const observedIds = new Set(observed.map((c) => c.dockerId));
+      db.transaction((tx) => {
+        const existingRows = tx.select().from(containers).where(eq(containers.hostId, hostId)).all();
+        const existingById = new Map(existingRows.map((row) => [row.dockerId, row]));
+        const observedIds = new Set(observed.map((c) => c.dockerId));
 
-      for (const container of observed) {
-        const { upsert, events: newEvents } = diffContainer(container, existingById.get(container.dockerId), ts);
-        upsert.hostId = hostId;
-        db.insert(containers).values(upsert).onConflictDoUpdate({ target: containers.dockerId, set: upsert }).run();
-        for (const event of newEvents) {
-          db.insert(events).values({ ...event, hostId }).run();
-        }
-      }
-
-      for (const row of existingRows) {
-        if (!observedIds.has(row.dockerId) && row.currentState !== "removed") {
-          const { upsert, events: newEvents } = diffMissing(row, ts);
-          db.insert(containers).values(upsert).onConflictDoUpdate({ target: containers.dockerId, set: upsert }).run();
+        for (const container of observed) {
+          const { upsert, events: newEvents } = diffContainer(container, existingById.get(container.dockerId), ts);
+          upsert.hostId = hostId;
+          tx.insert(containers).values(upsert).onConflictDoUpdate({ target: containers.dockerId, set: upsert }).run();
           for (const event of newEvents) {
-            db.insert(events).values({ ...event, hostId }).run();
+            tx.insert(events).values({ ...event, hostId }).run();
           }
         }
-      }
 
-      db.update(hosts).set({ status: "reachable", lastSeenAt: ts }).where(eq(hosts.id, hostId)).run();
+        for (const row of existingRows) {
+          if (!observedIds.has(row.dockerId) && row.currentState !== "removed") {
+            const { upsert, events: newEvents } = diffMissing(row, ts);
+            tx.insert(containers).values(upsert).onConflictDoUpdate({ target: containers.dockerId, set: upsert }).run();
+            for (const event of newEvents) {
+              tx.insert(events).values({ ...event, hostId }).run();
+            }
+          }
+        }
+
+        tx.update(hosts).set({ status: "reachable", lastSeenAt: ts }).where(eq(hosts.id, hostId)).run();
+      });
 
       // Health/metrics run after a successful container sync, on the same cadence as the
       // collector. Failures here are logged but must never take down the container-sync path
@@ -137,19 +139,21 @@ export function startCollector(options: CollectorOptions): Collector {
       }
     } catch (err) {
       logger.error({ err }, "collector cycle failed after retries");
-      db.update(hosts).set({ status: "unreachable", lastSeenAt: ts }).where(eq(hosts.id, hostId)).run();
-      db.insert(events)
-        .values({
-          hostId,
-          containerId: null,
-          occurredAt: ts,
-          source: "collector",
-          type: "collector_error",
-          severity: "critical",
-          summary: `Docker collection failed: ${err instanceof Error ? err.message : String(err)}`,
-          metadataJson: null,
-        })
-        .run();
+      db.transaction((tx) => {
+        tx.update(hosts).set({ status: "unreachable", lastSeenAt: ts }).where(eq(hosts.id, hostId)).run();
+        tx.insert(events)
+          .values({
+            hostId,
+            containerId: null,
+            occurredAt: ts,
+            source: "collector",
+            type: "collector_error",
+            severity: "critical",
+            summary: `Docker collection failed: ${err instanceof Error ? err.message : String(err)}`,
+            metadataJson: null,
+          })
+          .run();
+      });
 
       try {
         await runHealthCycle({ db, adapter, hostId, hostStatus: "unreachable", nowIso: ts, diskPath, logger });

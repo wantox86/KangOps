@@ -151,4 +151,57 @@ describe("runRetention across repeated cycles (no duplicate rollups)", () => {
     const raw = testDb.db.select().from(metricSamples).orderBy(desc(metricSamples.id)).all();
     expect(raw).toHaveLength(1);
   });
+
+  it("folds only closed hours older than cutoff while keeping open-hour and newer raw samples", () => {
+    // Cutoff at 2026-01-02T01:30:00.000Z - 24h = 2026-01-01T01:30:00.000Z.
+    // Closed hour 00:00 (ends 01:00 <= 01:30) -> folded & deleted.
+    insertRaw(1, "2026-01-01T00:15:00.000Z");
+    insertRaw(2, "2026-01-01T00:59:59.999Z");
+    // Open hour 01:00 (older than cutoff, but ends 02:00 > 01:30) -> kept raw.
+    insertRaw(3, "2026-01-01T01:10:00.000Z");
+    // Newer than cutoff -> skipped by SQL WHERE and kept raw.
+    insertRaw(4, "2026-01-01T01:30:00.000Z");
+    insertRaw(5, "2026-01-02T01:25:00.000Z");
+
+    runRetention(testDb.db, "2026-01-02T01:30:00.000Z");
+
+    const hourly = testDb.db.select().from(metricSamplesHourly).all();
+    expect(hourly).toHaveLength(1);
+    expect(hourly[0]).toMatchObject({ bucketStart: "2026-01-01T00:00:00.000Z", sampleCount: 2 });
+
+    const remainingIds = testDb.db
+      .select({ id: metricSamples.id })
+      .from(metricSamples)
+      .all()
+      .map((r) => r.id)
+      .sort((a, b) => a - b);
+    expect(remainingIds).toEqual([3, 4, 5]);
+  });
+
+  it("deletes more than 500 folded raw samples in batches within one retention pass", () => {
+    const rows = Array.from({ length: 620 }, (_, i) => ({
+      hostId: "local",
+      containerId: null,
+      observedAt: new Date(Date.parse("2026-01-01T00:00:00.000Z") + i * 5_000).toISOString(),
+      cpuPercent: 10,
+      memoryBytes: 1000,
+      memoryLimitBytes: 2000,
+    }));
+    testDb.db.insert(metricSamples).values(rows).run();
+
+    const config = { rawRetentionMs: 0, hourlyRetentionMs: 30 * 24 * 60 * 60 * 1000 };
+    runRetention(testDb.db, "2026-01-01T01:00:00.000Z", config);
+
+    const hourly = testDb.db.select().from(metricSamplesHourly).all();
+    expect(hourly).toHaveLength(1);
+    expect(hourly[0]?.sampleCount).toBe(620);
+    expect(testDb.db.select().from(metricSamples).all()).toHaveLength(0);
+  });
+
+  it("uses metric_samples_observed_at_idx when querying raw samples older than cutoff", () => {
+    const plan = testDb.sqlite
+      .prepare("EXPLAIN QUERY PLAN SELECT * FROM metric_samples WHERE observed_at < ?")
+      .all("2026-01-01T00:00:00.000Z") as Array<{ detail: string }>;
+    expect(plan.some((row) => row.detail.includes("metric_samples_observed_at_idx"))).toBe(true);
+  });
 });

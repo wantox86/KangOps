@@ -30,6 +30,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # No `ports:` -- only reachable by other services on the compose network, never published
     # to the host.
 
@@ -59,6 +64,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # No `ports:` -- only reachable by other services on the compose network, never published
     # to the host.
 
@@ -103,6 +113,11 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   web:
     build: ./web
@@ -136,6 +151,11 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   kangops_data:
